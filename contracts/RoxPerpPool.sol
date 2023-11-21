@@ -841,7 +841,7 @@ contract RoxPerpPool is IRoxPerpPool {
             bCache.curPrTimeSlot = PriceRange.updateU32Slot(bCache.curPrTimeSlot, bCache.prId, bCache.curTime);
 
             //update current price slot if next cross or latest loop
-            if (PriceRange.isRightCross(bCache.prId) || i == liqL.length -1){ 
+            if (PriceRange.isRightCross(bCache.prId) || i >= liqL.length -2){ 
                 // console.log(">>> Update [pr]:", bCache.prId, "  >>> [ps]:", bCache.psId);
                 priceSlots.writePriceSlot(bCache.psId, bCache.curPriceSlot);//sWrite to update
                 timeSlots.writeTimeSlot(bCache.psId, bCache.curPrTimeSlot);
