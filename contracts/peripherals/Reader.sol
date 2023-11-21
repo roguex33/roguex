@@ -101,7 +101,7 @@ contract Reader {
         rate0 = rate0 > 1000000 ? 1000000 : rate0;
 
         rate1 = r1 > 0 ? 
-                perpPool.reserve1() * 1000000 / r0
+                perpPool.reserve1() * 1000000 / r1
                 :
                 l1rec > 0 ? 1000000 : 0;
         rate1 = rate1 > 1000000 ? 1000000 : rate1;
