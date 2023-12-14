@@ -496,7 +496,7 @@ contract MasterChef {
         }
     }
 
-    function notifyRewardAmount(address token, uint256 _amount) external  {
+    function notifyRewardAmount(address token, uint256 _amount) external {
         require(_amount > 0, "amount not zero");
         require(token != address(0), "zero Token");
         if (!isReward[token]) {

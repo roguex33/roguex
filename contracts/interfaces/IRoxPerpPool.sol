@@ -13,9 +13,6 @@ interface IRoxPerpPool {
     function reserve1() external view returns (uint256);
     function sBalance0() external view returns (uint256);
     function sBalance1() external view returns (uint256);
-    // function globalLong1() external view returns (uint256);
-    // function globalLong0() external view returns (uint256);
-    function timeSlots(uint) external view returns (uint256);
 
     function closeMinuteMap0(uint32) external view returns (int256);
     function closeMinuteMap1(uint32) external view returns (int256);
@@ -33,7 +30,7 @@ interface IRoxPerpPool {
         address _account,
         uint256 _liquidityDelta,
         bool _long0
-    ) external returns (bytes32, uint256);
+    ) external returns (bytes32, uint256, uint256);
 
     function decreasePosition(
         // address _account,
@@ -43,7 +40,7 @@ interface IRoxPerpPool {
         uint256 _sizeDelta,
         address _feeRecipient,
         bool _toETH
-    ) external returns (bool, bool, uint256, address);
+    ) external returns (bool, bool, uint256, address, uint256);
 
     function token0() external view returns (address);
     function token1() external view returns (address);
@@ -55,13 +52,6 @@ interface IRoxPerpPool {
     ) external view returns (TradeData.TradePosition memory);
 
   
-    function priceSlot(
-        uint256 psId
-    ) external view returns (uint256);
-
-    function prInfo(
-        uint256 timePr
-    ) external view returns (PriceRange.FeeInfo memory);
 
     function rgFeeSlot(
     ) external view returns (TradeData.RoguFeeSlot memory);
@@ -69,16 +59,7 @@ interface IRoxPerpPool {
     function updateFundingRate(
         ) external returns (uint64, uint64);
 
-    function encodeSlots(
-        uint256 prStart, uint256 prEnd, bool isPrice
-    ) external view returns (uint256[] memory);
-    
-    function updateSwapFee(
-        int24 tick,
-        bool zeroForOne,
-        uint256 feeX128,
-        uint256 liquidity
-    ) external;
+
 
     // function prPrice(
     //     uint pr

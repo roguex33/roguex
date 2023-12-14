@@ -356,7 +356,7 @@ interface IVoter {
     function distribute(address _gauge) external;
 }
 
-contract VotingRewardV2 {
+contract VotingReward {
     uint internal _unlocked = 1;
     modifier lock() {
         require(_unlocked == 1);
@@ -536,7 +536,7 @@ contract VotingRewardV2 {
     }
 }
 
-contract VotingRewardFactoryV2 is Ownable {
+contract VotingRewardFactory is Ownable {
     address public last_voting_reward;
     address public voter;
 
@@ -548,7 +548,7 @@ contract VotingRewardFactoryV2 is Ownable {
         address[] memory allowedRewards
     ) external returns (address) {
         require(voter != address(0));
-        last_voting_reward = address(new VotingRewardV2(voter, allowedRewards));
+        last_voting_reward = address(new VotingReward(voter, allowedRewards));
         return last_voting_reward;
     }
 }

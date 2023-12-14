@@ -115,10 +115,6 @@ contract PerpRouter is IPerpRouter {
         require(_tokenAmount > 0, "zero amount in");
         address _account = _sender();
         // require(_sqrtPriceX96 <= _tPrice, "pSplitage");
-        if (_sqrtPriceX96 > 0){
-            uint160 _pP = IRoxUtils(roxUtils).getSqrtTwapX96(IRoxPerpPool(_perpPool).spotPool());
-            require(_long0 ? _sqrtPriceX96 <= _pP : _sqrtPriceX96 >= _pP, "pSplitage");
-        }
 
         if (_long0){
             address _t0 = IRoxPerpPool(_perpPool).token0();
@@ -140,7 +136,7 @@ contract PerpRouter is IPerpRouter {
                 TransferHelper.safeTransferFrom(_t1, _account, _perpPool, _tokenAmount);
             }
         }
-        _increasePosition(_account,  _perpPool, _sizeDelta, _long0);
+        _increasePosition(_account,  _perpPool, _sizeDelta, _sqrtPriceX96, _long0);
     }
 
     function increasePositionOrder(
@@ -156,31 +152,31 @@ contract PerpRouter is IPerpRouter {
 
         // require(msg.sender == perpOrderbook, "onlyOB"); 
 
-        if (_sqrtPriceX96 > 0){
-            uint160 _pP = IRoxUtils(roxUtils).getSqrtTwapX96(IRoxPerpPool(_perpPool).spotPool());
-            require(_long0 ? _sqrtPriceX96 <= _pP : _sqrtPriceX96 >= _pP, "pSplitage");
-        }
-
         if (_long0)
             TransferHelper.safeTransferFrom(IRoxPerpPool(_perpPool).token0(), msg.sender, _perpPool, _tokenAmount);
         else {
             TransferHelper.safeTransferFrom(IRoxPerpPool(_perpPool).token1(), msg.sender, _perpPool, _tokenAmount);
         }
-        _increasePosition(_account,  _perpPool, _sizeDelta, _long0);
+        _increasePosition(_account,  _perpPool, _sizeDelta, _sqrtPriceX96, _long0);
     }
 
     function _increasePosition(
         address _account,
         address _perpPool,
         uint256 _sizeDelta,
+        uint256 _opPrice,
         bool _long0
-    ) private{
+    ) private {
         require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "invalid RoxPerpPool");
-        (bytes32 key, uint256 incDelta) = IRoxPerpPool(_perpPool).increasePosition(
+        (bytes32 key, uint256 incDelta, uint256 openPrice) = IRoxPerpPool(_perpPool).increasePosition(
             _account,
             _sizeDelta,
             _long0
         );
+
+        if (_opPrice > 0){
+            require(_long0 ? openPrice <= _opPrice : openPrice >= _opPrice, "pSplitage");
+        }
 
         if (swapMining != address(0)) {
             ISwapMining(swapMining).depositSwap(
@@ -202,7 +198,7 @@ contract PerpRouter is IPerpRouter {
         bytes32 _key
     ) external {
         require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "invalid RoxPerpPool");
-        (bool _del, bool _isLiq, uint256 decDelta, address _account) = IRoxPerpPool(_perpPool).decreasePosition(
+        (bool _del, bool _isLiq, uint256 decDelta, address _account, ) = IRoxPerpPool(_perpPool).decreasePosition(
             _key,
             0,
             0,
@@ -240,19 +236,19 @@ contract PerpRouter is IPerpRouter {
         else
             require(msg.sender == _account || msg.sender == perpOrderbook);
 
-        if (_sqrtPriceX96 > 0){
-            uint160 _pP = IRoxUtils(roxUtils).getSqrtTwapX96(IRoxPerpPool(_perpPool).spotPool());
-            require(_long0 ? _sqrtPriceX96 >= _pP : _sqrtPriceX96 <= _pP, "pSplitage");
-        }
+
         bytes32 _key = TradeMath.getPositionKey(_account, _perpPool, _long0);
 
-        (bool _del, /*bool _isLiq*/, uint256 decDelta, ) = IRoxPerpPool(_perpPool).decreasePosition(
+        (bool _del, /*bool _isLiq*/, uint256 decDelta, , uint256 cPrice) = IRoxPerpPool(_perpPool).decreasePosition(
             _key,
             _collateralDelta,
             _sizeDelta,
             _account,
             _toETH
         );
+        if (_sqrtPriceX96 > 0){
+            require(_long0 ? _sqrtPriceX96 <= cPrice : _sqrtPriceX96 >= cPrice, "pSplitage");
+        }
 
         if (swapMining != address(0)) {
             ISwapMining(swapMining).depositSwap(
@@ -272,8 +268,8 @@ contract PerpRouter is IPerpRouter {
     function execTakingProfitSet(address _perpPool, bytes32 _posKey) external {
         require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "invalid RoxPerpPool");
         address feeReceipt = msg.sender;
-        uint256 setlThres = IRoguexFactory(factory).setlThres();
         address spotPool = IRoxPerpPool(_perpPool).spotPool();
+        uint256 setlThres = IRoxUtils(roxUtils).setlThres(spotPool);
         TradeData.TradePosition memory _pos = IRoxPerpPool(_perpPool).getPositionByKey(_posKey);
         if (_pos.long0){
             (uint256 r0,  ) = IRoxSpotPool(spotPool).availableReserve(true, false);

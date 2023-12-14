@@ -18,12 +18,31 @@ contract RoxPosnPool is IRoxPosnPool {
     using LowGasSafeMath for uint256;
     using SafeCast for uint256;
     using SafeCast for int256;
+    using PriceRange for uint256[370];
+    using PriceRange for mapping(uint256 => PriceRange.FeeInfo);
 
     // price = realLiq / supLiq 
     // position realLiq = entrySupLiq * latestPrice
     //                  = entryRealLiq / entryPrice * latestPrice
     // supLiq = realLiq / price
     mapping(bytes32 => RoxPosition.Position) public roxPositions;
+
+    // Price related.
+    // Price Range:
+    //      priceRangeId = (curTick + 887272)/600; NameAs => pr /@ max value = 887272 * 2(1774544Ticks) / 600 = 2958 PriceRanges
+    // Price Slot:
+    //      every 8 price Range(32bitPerId) stored in one uint256 slot,
+    //      psId : 0 ~ 369      (2958 / 8 = 370)
+    //      price Tick SlotId = priceRangeId / 8; 
+    //      update time: u32,
+    uint256[370] private priceSlots;
+    uint256[370] public override timeSlots;  
+    mapping(uint256 => PriceRange.FeeInfo) public prs;
+
+
+
+
+
 
     address immutable public factory;
     address immutable public token0;
@@ -46,6 +65,92 @@ contract RoxPosnPool is IRoxPosnPool {
             perpPool
         ) = IRoxPosnPoolDeployer(msg.sender).parameters();
     }
+
+
+    function priceSlot(uint psId) public view override returns (uint256){
+        return priceSlots.loadPriceslot(psId);
+    }
+    
+
+    function timeSlot(uint psId) public view override returns (uint256){
+        return timeSlots[psId];
+    }
+    
+
+
+    function prInfo(
+        uint256 timePr
+    ) external override view returns (PriceRange.FeeInfo memory){
+        return prs[timePr];
+    }
+
+    function writePriceSlot(
+            uint16 _psId,
+            uint256 _priceSlot) external override {
+        require(msg.sender == perpPool, "xPp");
+        priceSlots.writePriceSlot(_psId, _priceSlot);
+    }
+
+    function writeTimeSlot(
+            uint16 _psId,
+            uint256 _timeSlot) external override {
+        require(msg.sender == perpPool, "xPp");
+        timeSlots.writeTimeSlot(_psId, _timeSlot);
+    }
+
+    function updatePerpFee(
+        uint256 cacheTime,
+        uint256 curTime,
+        uint16 pr,
+        uint256 price,
+        uint256 liq,
+        uint256 feeDelta,
+        bool long0) external override {
+        require(msg.sender == perpPool, "xPp");
+        prs.updatePerpFee(
+            cacheTime,
+            curTime,
+            pr,
+            price,
+            liq,
+            feeDelta,
+            long0);
+    }
+
+
+    function updateSwapFee(
+        int24 tick,
+        bool zeroForOne,
+        uint256 feeToken,
+        uint256 liquidity
+    ) external override {
+        require(msg.sender == spotPool);
+        (uint16 pr, uint16 ps) = PriceRange.tickTo(tick);
+        uint256 price = priceSlots.loadPrPrice(pr);
+        uint256 slotCache = timeSlots[ps];
+        uint256 curTime = block.timestamp;
+        if (price < 1)
+            return;
+        // recalculate fee according to supply-liquidity  
+        prs.updateSpotFee(
+            PriceRange.prTime(slotCache, pr), 
+            curTime, pr, zeroForOne, feeToken, liquidity, price );
+        timeSlots[ps] = PriceRange.updateU32Slot(slotCache, pr, curTime);
+    }
+    
+    function encodeSlots(
+        uint256 prStart, uint256 prEnd, bool isPrice
+        ) public override view returns (uint256[] memory s) {
+        if (isPrice)
+            return priceSlots.prArray(prStart, prEnd, true);
+        else
+            return timeSlots.prArray(prStart, prEnd, false);
+    }
+
+
+
+
+
 
     function positions(bytes32 key)
         public
@@ -126,9 +231,9 @@ contract RoxPosnPool is IRoxPosnPool {
             for(uint16 prLoop = dCache.prStart; prLoop < dCache.prEnd; prLoop++){
                 if (dCache.curPriceSlot < 1 || PriceRange.isLeftCross(prLoop)){ 
                     dCache.entryTimeSlot = position.timeMap[dCache.prId];
-                    dCache.curTimeSlot = IRoxPerpPool(perpPool).timeSlots(PriceRange.prToPs(prLoop));
+                    dCache.curTimeSlot = timeSlots[PriceRange.prToPs(prLoop)];
                     dCache.entryPriceSlot = position.priceMap[dCache.prId];
-                    dCache.curPriceSlot = IRoxPerpPool(perpPool).priceSlot(PriceRange.prToPs(prLoop));
+                    dCache.curPriceSlot = priceSlot(PriceRange.prToPs(prLoop));
                     dCache.prId += 1;
                 }
                 dCache.entryPrice = PriceRange.priceInPs(dCache.entryPriceSlot, prLoop);
@@ -139,8 +244,8 @@ contract RoxPosnPool is IRoxPosnPool {
 
                 //fee settle
                 if (dCache.entryPrice > 0) {
-                    PriceRange.FeeInfo memory prEntry = IRoxPerpPool(perpPool).prInfo(PriceRange.prTimeIndex(prLoop, dCache.entryTime));
-                    PriceRange.FeeInfo memory prCur = IRoxPerpPool(perpPool).prInfo(PriceRange.prTimeIndex(prLoop, dCache.curTime));
+                    PriceRange.FeeInfo memory prEntry = prs[PriceRange.prTimeIndex(prLoop, dCache.entryTime)];
+                    PriceRange.FeeInfo memory prCur = prs[PriceRange.prTimeIndex(prLoop, dCache.curTime)];
                     uint256 entrySupLiq = uint256(position.liquidity) * PriceRange.PRP_PREC / dCache.entryPrice;
                     position.spotFeeOwed0 += PriceRange.feeCollect(entrySupLiq, prEntry.spotFee0X128, prCur.spotFee0X128);
                     position.spotFeeOwed1 += PriceRange.feeCollect(entrySupLiq, prEntry.spotFee1X128, prCur.spotFee1X128);
@@ -169,10 +274,10 @@ contract RoxPosnPool is IRoxPosnPool {
 
         }
         else{
-            position.priceMap = IRoxPerpPool(perpPool).encodeSlots(dCache.prStart, dCache.prEnd, true);
+            position.priceMap = encodeSlots(dCache.prStart, dCache.prEnd, true);
         }
 
-        position.timeMap = IRoxPerpPool(perpPool).encodeSlots(dCache.prStart, dCache.prEnd, false);
+        position.timeMap = encodeSlots(dCache.prStart, dCache.prEnd, false);
         position.liquidity = position.liquidity + liquidityDelta;
         roxPositions[_key] = position;
         // return position;
@@ -187,15 +292,8 @@ contract RoxPosnPool is IRoxPosnPool {
         // RoxPosition.Position storage position = positions.get(msg.sender, tickLower, tickUpper);
         RoxPosition.Position storage position = roxPositions[_key];
 
-        // console.log(">>>collect");
-        // console.log(">>>collect");
-
-        // console.log("ow0", position.tokensOwed0, "   ow1: ",position.tokensOwed1);
-        // console.log("req0", _amount0Requested, "   req1: ",_amount0Requested);
-
         amount0 = _amount0Requested > position.tokensOwed0 ? position.tokensOwed0 : _amount0Requested;
         amount1 = _amount1Requested > position.tokensOwed1 ? position.tokensOwed1 : _amount1Requested;
-        // console.log("amount0", amount0, "   amount1: ",amount1);
     
         position.tokensOwed0 -= amount0;
         position.tokensOwed1 -= amount1;
@@ -231,36 +329,29 @@ contract RoxPosnPool is IRoxPosnPool {
             if (dCache.curPriceSlot < 1 || PriceRange.isLeftCross(prLoop)){ 
                 uint256 _ps = PriceRange.prToPs(prLoop);
                 dCache.entryTimeSlot = position.timeMap[dCache.prId];
-                dCache.curTimeSlot = IRoxPerpPool(perpPool).timeSlots(_ps);
+                dCache.curTimeSlot = timeSlots[_ps];
                 dCache.entryPriceSlot = position.priceMap[dCache.prId];
-                dCache.curPriceSlot = IRoxPerpPool(perpPool).priceSlot(_ps);
+                dCache.curPriceSlot = priceSlot(_ps);
                 dCache.prId += 1;
             }
             dCache.entryPrice = PriceRange.priceInPs(dCache.entryPriceSlot, prLoop);
             dCache.entryTime = PriceRange.prTime(dCache.entryTimeSlot, prLoop);
             dCache.curTime = PriceRange.prTime(dCache.curTimeSlot, prLoop);
             
-            if (dCache.curTime > dCache.entryTime && dCache.entryPrice > 0){
-                // console.log("curT: ", dCache.curTime, " entryT: ", dCache.entryTime);
-                // console.log("dCache.entryTimeSlot: ", dCache.entryTimeSlot, " dCache.curTimeSlot: ", dCache.curTimeSlot);
+            if (dCache.curTime > dCache.entryTime && dCache.entryPrice > 0){          
                 //fee settle
-
-                PriceRange.FeeInfo memory prEntry = IRoxPerpPool(perpPool).prInfo(PriceRange.prTimeIndex(prLoop, dCache.entryTime));
-                PriceRange.FeeInfo memory prCur = IRoxPerpPool(perpPool).prInfo(PriceRange.prTimeIndex(prLoop, dCache.curTime));
-                // console.log("cur spot0: ", prCur.spotFee0X128,"   cur spot1: ", prCur.spotFee1X128 );
-                // console.log("ety spot0: ", prEntry.spotFee0X128,"   ety spot1: ", prEntry.spotFee1X128 );
+                PriceRange.FeeInfo memory prEntry = prs[PriceRange.prTimeIndex(prLoop, dCache.entryTime)];
+                PriceRange.FeeInfo memory prCur = prs[PriceRange.prTimeIndex(prLoop, dCache.curTime)];
 
                 uint256 entrySupLiq = FullMath.mulDiv(position.liquidity,  PriceRange.PRP_PREC,  dCache.entryPrice);
-                // console.log("entrySupLiq: ", entrySupLiq );
                 position.spotFeeOwed0 += PriceRange.feeCollect(entrySupLiq, prEntry.spotFee0X128, prCur.spotFee0X128);
                 position.spotFeeOwed1 += PriceRange.feeCollect(entrySupLiq, prEntry.spotFee1X128, prCur.spotFee1X128);
-                // console.log("spotFeeOwed1: ", position.spotFeeOwed1 );
                 position.perpFeeOwed0 += PriceRange.feeCollect(entrySupLiq, prEntry.perpFee0X128, prCur.perpFee0X128);
                 position.perpFeeOwed1 += PriceRange.feeCollect(entrySupLiq, prEntry.perpFee1X128, prCur.perpFee1X128);
             }
         } 
         // Update to latesr time slots
-        position.timeMap = IRoxPerpPool(perpPool).encodeSlots(dCache.prStart, dCache.prEnd, false);
+        position.timeMap = encodeSlots(dCache.prStart, dCache.prEnd, false);
         roxPositions[_key] = position;
     }
 
@@ -297,17 +388,12 @@ contract RoxPosnPool is IRoxPosnPool {
 
         RoxPosition.Position memory position = roxPositions[_key];
         UpdCache memory dCache;
-        // console.log("position.liquidity", position.liquidity);
-        // console.log("liquidityDelta    ", liquidityDelta);
         require(position.liquidity >= liquidityDelta, "out of liq burn");
 
         // // uint128 positionLiquidity_p = params.liquidity;// * price
         dCache.prStart = uint16(PriceRange.tickToPr(position.tickLower));
         dCache.prEnd = uint16(PriceRange.tickToPr(position.tickUpper));
 
-        // console.log("dCache.prStart : ", dCache.prStart, "  dCache.end : ", dCache.prStart);
-        // TradeMath.printInt("position.tickLower : ", position.tickLower);
-        // TradeMath.printInt("position.tickUpper : ", position.tickUpper);
 
         dCache.tickLower = position.tickLower;
         liqDelta = new uint128[]( uint(position.tickUpper - position.tickLower) / 600);
@@ -321,9 +407,9 @@ contract RoxPosnPool is IRoxPosnPool {
                 if (dCache.curPriceSlot < 1 || PriceRange.isLeftCross(prLoop)){ 
                     uint256 _ps = PriceRange.prToPs(prLoop);
                     dCache.entryTimeSlot = position.timeMap[dCache.prId];
-                    dCache.curTimeSlot = IRoxPerpPool(perpPool).timeSlots(_ps);
+                    dCache.curTimeSlot = timeSlots[_ps];
                     dCache.entryPriceSlot = position.priceMap[dCache.prId];
-                    dCache.curPriceSlot = IRoxPerpPool(perpPool).priceSlot(_ps);
+                    dCache.curPriceSlot = priceSlot(_ps);
                     dCache.prId += 1;
                 }
                 dCache.entryPrice = PriceRange.priceInPs(dCache.entryPriceSlot, prLoop);
@@ -334,8 +420,8 @@ contract RoxPosnPool is IRoxPosnPool {
 
                 //fee settle
                 if (dCache.entryPrice > 0) {
-                    PriceRange.FeeInfo memory prEntry = IRoxPerpPool(perpPool).prInfo(PriceRange.prTimeIndex(prLoop, dCache.entryTime));
-                    PriceRange.FeeInfo memory prCur = IRoxPerpPool(perpPool).prInfo(PriceRange.prTimeIndex(prLoop, dCache.curTime));
+                    PriceRange.FeeInfo memory prEntry = prs[PriceRange.prTimeIndex(prLoop, dCache.entryTime)];
+                    PriceRange.FeeInfo memory prCur = prs[PriceRange.prTimeIndex(prLoop, dCache.curTime)];
                     uint256 entrySupLiq = uint256(position.liquidity) * PriceRange.PRP_PREC / dCache.entryPrice;
                     position.spotFeeOwed0 += PriceRange.feeCollect(entrySupLiq, prEntry.spotFee0X128, prCur.spotFee0X128);
                     position.spotFeeOwed1 += PriceRange.feeCollect(entrySupLiq, prEntry.spotFee1X128, prCur.spotFee1X128);
@@ -346,37 +432,21 @@ contract RoxPosnPool is IRoxPosnPool {
                  //TODO: combine burn to save gas
                 // if (dCache.entryPrice != dCache.curPrice || prs == endPr){
                 {
-                    // console.log( "Entry Price: ",dCache.entryPrice,"  Curr Price: ", dCache.curPrice);
                     dCache.liquidity = TradeMath.liqTrans(liquidityDelta, dCache.entryPrice, dCache.curPrice);
                     liqDelta[i] = dCache.liquidity;
                     // liqRatio[i+1] = dCache.curPrice;
                     i += 1;
 
-                    // console.log("entryPrice", dCache.entryPrice, "   curPrice : ", dCache.curPrice);
-                    // console.log("dCache.liquidity", dCache.liquidity, "   liquidityDelta : ", liquidityDelta);
                     (uint256 a0cache, uint256 a1cache) = RoxPosition.getRangeToken(dCache.liquidity, 
                             dCache.tickLower, (dCache.tickLower+=600), tick, sqrtPriceX96);
                     amount0 += a0cache;
                     amount1 += a1cache;
-
-                    //Update liquidity in spot pool
-                    // _updateLiquidity(dCache.tickLower, dCache.tickLower + 600, -int128(dCache.liquidity), tickCur);
-                    // TODO: save sqrtPrice from tick to save gas
-                    // (dCache.a0cache, dCache.a1cache) = RoxPosition.getRangeToken(dCache.liquidity, 
-                    //     dCache.tickLower, (dCache.tickLower += 600), tickCur, curSqrtPrice);
-                    // console.log("dC.liquidity : ", dCache.liquidity);
-                    // console.log("re.liquidity : ", liquidity);
-                    // TradeMath.printInt("PrLoop StrTick:", TradeMath.prToTick(prLoop));
-                    // TradeMath.printInt("PrLoop EndTick:", TradeMath.prToTick(prLoop+1));
-                    // amount0 += dCache.a0cache;
-                    // amount1 += dCache.a1cache;
                 }
             }
             position.tokensOwed0 += uint128(amount0);
             position.tokensOwed1 += uint128(amount1);
         }
-        // console.log("ow0", position.tokensOwed0, "   ow1: ",position.tokensOwed1);
-        position.timeMap = IRoxPerpPool(perpPool).encodeSlots(dCache.prStart, dCache.prEnd, false);
+        position.timeMap = encodeSlots(dCache.prStart, dCache.prEnd, false);
         position.liquidity = position.liquidity - liquidityDelta;
         // Do not need to update price in decrease liquidity
         roxPositions[_key] = position;
@@ -392,21 +462,14 @@ contract RoxPosnPool is IRoxPosnPool {
 
         RoxPosition.Position memory position = roxPositions[_key];
         UpdCache memory dCache;
-        // console.log("position.liquidity", position.liquidity);
-        // console.log("liquidityDelta    ", liquidityDelta);
         require(position.liquidity >= liquidityDelta, "out of liq burn");
 
         // // uint128 positionLiquidity_p = params.liquidity;// * price
         dCache.prStart = uint16(PriceRange.tickToPr(position.tickLower));
         dCache.prEnd = uint16(PriceRange.tickToPr(position.tickUpper));
-
-        // console.log("dCache.prStart : ", dCache.prStart, "  dCache.end : ", dCache.prStart);
-        // TradeMath.printInt("position.tickLower : ", position.tickLower);
-        // TradeMath.printInt("position.tickUpper : ", position.tickUpper);
-
         dCache.tickLower = position.tickLower;
-        // uint256 amount0;
-        // uint256 amount1;
+
+
         // Update if liquidity > 0
         if (position.priceMap.length > 0){
             dCache.entryPriceSlot = position.priceMap[0];
@@ -414,9 +477,9 @@ contract RoxPosnPool is IRoxPosnPool {
                 if (dCache.curPriceSlot < 1 || PriceRange.isLeftCross(prLoop)){ 
                     uint256 _ps = PriceRange.prToPs(prLoop);
                     dCache.entryTimeSlot = position.timeMap[dCache.prId];
-                    dCache.curTimeSlot = IRoxPerpPool(perpPool).timeSlots(_ps);
+                    dCache.curTimeSlot = timeSlots[_ps];
                     dCache.entryPriceSlot = position.priceMap[dCache.prId];
-                    dCache.curPriceSlot = IRoxPerpPool(perpPool).priceSlot(_ps);
+                    dCache.curPriceSlot = priceSlot(_ps);
                     dCache.prId += 1;
                 }
                 dCache.entryPrice = PriceRange.priceInPs(dCache.entryPriceSlot, prLoop);
@@ -428,10 +491,7 @@ contract RoxPosnPool is IRoxPosnPool {
                  //TODO: combine burn to save gas
                 // if (dCache.entryPrice != dCache.curPrice || prs == endPr){
                 {
-                    // console.log( "Entry Price: ",dCache.entryPrice,"  Curr Price: ", dCache.curPrice);
                     dCache.liquidity = TradeMath.liqTrans(liquidityDelta, dCache.entryPrice, dCache.curPrice);
-                    // console.log("entryPrice", dCache.entryPrice, "   curPrice : ", dCache.curPrice);
-                    // console.log("dCache.liquidity", dCache.liquidity, "   liquidityDelta : ", liquidityDelta);
                     (uint256 a0cache, uint256 a1cache) = RoxPosition.getRangeToken(dCache.liquidity, 
                             dCache.tickLower, (dCache.tickLower+=600), tick, sqrtPriceX96);
                     amount0 += a0cache;
@@ -452,7 +512,6 @@ contract RoxPosnPool is IRoxPosnPool {
         
         if (position.liquidity > 0){
             UpdCache memory dCache;
-            // console.log("dCache.prStart : ", dCache.prStart, "  dCache.end : ", dCache.prEnd);
             dCache.prStart = uint16(PriceRange.tickToPr(position.tickLower));
             dCache.prEnd = uint16(PriceRange.tickToPr(position.tickUpper));
             // Update if liquidity > 0
@@ -461,9 +520,9 @@ contract RoxPosnPool is IRoxPosnPool {
                 if (dCache.curPriceSlot < 1 || PriceRange.isLeftCross(prLoop)){ 
                     uint256 _ps = PriceRange.prToPs(prLoop);
                     dCache.entryTimeSlot = position.timeMap[dCache.prId];
-                    dCache.curTimeSlot = IRoxPerpPool(perpPool).timeSlots(_ps);
+                    dCache.curTimeSlot = timeSlots[_ps];
                     dCache.entryPriceSlot = position.priceMap[dCache.prId];
-                    dCache.curPriceSlot = IRoxPerpPool(perpPool).priceSlot(_ps);
+                    dCache.curPriceSlot = priceSlot(_ps);
                     dCache.prId += 1;
                 }
                 dCache.entryPrice = PriceRange.priceInPs(dCache.entryPriceSlot, prLoop);
@@ -471,8 +530,8 @@ contract RoxPosnPool is IRoxPosnPool {
                 dCache.curTime = PriceRange.prTime(dCache.curTimeSlot, prLoop);
                 
                 if (dCache.curTime > dCache.entryTime && dCache.entryPrice > 0){
-                    PriceRange.FeeInfo memory prEntry = IRoxPerpPool(perpPool).prInfo(PriceRange.prTimeIndex(prLoop, dCache.entryTime));
-                    PriceRange.FeeInfo memory prCur = IRoxPerpPool(perpPool).prInfo(PriceRange.prTimeIndex(prLoop, dCache.curTime));
+                    PriceRange.FeeInfo memory prEntry = prs[PriceRange.prTimeIndex(prLoop, dCache.entryTime)];
+                    PriceRange.FeeInfo memory prCur = prs[PriceRange.prTimeIndex(prLoop, dCache.curTime)];
                     uint256 entrySupLiq = FullMath.mulDiv(position.liquidity,  PriceRange.PRP_PREC,  dCache.entryPrice);
                     position.spotFeeOwed0 += PriceRange.feeCollect(entrySupLiq, prEntry.spotFee0X128, prCur.spotFee0X128);
                     position.spotFeeOwed1 += PriceRange.feeCollect(entrySupLiq, prEntry.spotFee1X128, prCur.spotFee1X128);

@@ -32,7 +32,6 @@ library DispData {
         uint256 size;
         uint256 collateral;
         uint256 reserve;
-        uint256 liqResv;
         uint256 colToken;
         address token0;
         address token1;
@@ -40,15 +39,18 @@ library DispData {
         uint256 closeSqrtPriceX96;
         uint256 liqSqrtPriceX96;
         uint256 uncollectPerpFee;
+        uint256 fundingFee;
+
         uint256 delta;
         bool isLiq;
         bool hasProfit;
         bool long0;
-        int32 openSpread;
+        uint32 openSpread;
         int32 closeSpread;
         uint24 fee;
         address pool;
         address spotPool;
+        uint256 uncollectFee;
         string message;
     }
 
@@ -74,10 +76,8 @@ library DispData {
 }
 
 contract Reader {
-    using SafeMath for uint256;
-    using SafeMath for int256;
-    using SafeCast for uint256;
-    using SafeCast for int256;
+    using LowGasSafeMath for uint256;
+    using LowGasSafeMath for uint128;
 
     uint256 public constant RATIO_PREC = 1e6;
     uint256 public constant MAX_LEVERAGE = 80;
@@ -110,21 +110,26 @@ contract Reader {
 
 
     struct DecreaseCache {
-        uint160 curPrice;
         int24 closeTick;
         int24 curTick;
         uint32 curTime;
+        uint24 closeSpread;
         bool del;
         bool isLiq;
         bool hasProfit;
         uint160 closePrice;
+        uint160 twapPrice;
         uint256 payBack;
         uint256 fee;
         uint256 feeDist;
         uint256 profitDelta;
         uint256 posFee;
         uint256 origCollateral;
+        uint256 colAfterfee;
         uint256 origSize;
+        uint256 decLiqPrice;
+        uint256 keepLevColDelta;
+        uint256 fundingFee;
     }
 
     function estimateDecrease(
@@ -159,12 +164,17 @@ contract Reader {
         } else if (_sizeDelta > position.size) {
             return (dCache, position, "exceed size");
         }
-        (dCache.closePrice, dCache.curPrice) = roxUtils.gClosePrice(
+
+        (dCache.closePrice, dCache.twapPrice, dCache.closeSpread) = roxUtils.gClosePrice(
                         _perpPool,
                         _sizeDelta,
                         position,
                         false
                     );
+                            
+        dCache.closeSpread -= 1000000;
+        
+        position.openSpread -= 1000000;
 
         TradeData.RoguFeeSlot memory rgFs = IRoxPerpPool(_perpPool).rgFeeSlot();
         // collect funding fee and uncollect fee based on full position size
@@ -182,9 +192,10 @@ contract Reader {
             position.entryFdAccum = uint64(dCache.posFee);
            
             dCache.fee += position.uncollectFee;
-            position.uncollectFee = 0;
+            dCache.fundingFee = dCache.fee;
+            // position.uncollectFee = 0; // do not clear here
 
-            dCache.posFee = roxUtils.collectPosFee(position.size);
+            dCache.posFee = roxUtils.collectPosFee(position.size, IRoxPerpPool(_perpPool).spotPool());
         }
         // Calculate PNL
         (dCache.hasProfit, dCache.profitDelta) = TradeMath.getDelta(
@@ -229,7 +240,11 @@ contract Reader {
 
             // settle fee
             position.collateral = position.collateral.sub(dCache.fee);// size checked before
-            if (dCache.del){
+            dCache.colAfterfee = dCache.origCollateral.sub(dCache.fee);
+
+            dCache.keepLevColDelta = FullMath.mulDiv(_sizeDelta, position.collateral, position.size);
+
+            if (dCache.del){ 
                 // pay remaining collateral back to trader
                 _collateralDelta = position.collateral;
             }
@@ -248,6 +263,22 @@ contract Reader {
                 dCache.payBack = 0;
                 return (dCache, position, "maxL");
             }
+
+            (, , dCache.closeSpread) = roxUtils.gClosePrice(
+                        _perpPool,
+                        position.size,
+                        position,
+                        false
+                    );
+            dCache.closeSpread -= 1000000;
+
+            dCache.decLiqPrice = estimateLiqPrice(
+                        position.long0, 
+                        position.collateral, 
+                        position.entrySqrtPriceX96, 
+                        uint256(dCache.closeSpread),
+                        position.size
+                );
         } else {
             dCache.del = true;
             _sizeDelta = position.size;
@@ -258,13 +289,13 @@ contract Reader {
         {
             // trans. to sameside token
             dCache.feeDist = position.long0
-                ? TradeMath.token1to0NoSpl(dCache.fee, dCache.curPrice)
-                : TradeMath.token0to1NoSpl(dCache.fee, dCache.curPrice);
+                ? TradeMath.token1to0NoSpl(dCache.fee, dCache.twapPrice)
+                : TradeMath.token0to1NoSpl(dCache.fee, dCache.twapPrice);
 
             if (dCache.feeDist > position.transferIn) {
                 dCache.feeDist = position.transferIn;
             }
-            position.transferIn -= dCache.feeDist;
+            position.transferIn -= uint128(dCache.feeDist);
         }
 
         // Settle part Profit, Loss & Fees settlement
@@ -273,21 +304,190 @@ contract Reader {
                 dCache.payBack = position.long0
                     ? TradeMath.token1to0NoSpl(
                         dCache.payBack,
-                        dCache.curPrice
+                        dCache.twapPrice
                     )
                     : TradeMath.token0to1NoSpl(
                         dCache.payBack,
-                        dCache.closePrice
+                        dCache.twapPrice
                     );
-            }
-            if (dCache.del){
-                // pay fee back to trader if not liquidated
-                dCache.payBack += position.liqResv;
             }
         }
 
         return (dCache, position, "");
     }
+
+
+    function estimateDecreaseL(
+        address _perpPool,
+        uint256 _sizeDelta,
+        bytes32 _key
+    )
+        public
+        view
+        returns (
+            DecreaseCache memory dCache,
+            TradeData.TradePosition memory position,
+            string memory
+        )
+    {
+        position = IRoxPerpPool(_perpPool).getPositionByKey(_key);
+        dCache.origCollateral = position.collateral;
+        dCache.origSize = position.size;
+
+        if (position.size < 1) return (dCache, position, "empty size");
+
+        if (position.size == _sizeDelta) {
+            dCache.del = true;
+        }else if (_sizeDelta > position.size) {
+            return (dCache, position, "exceed size");
+        }
+
+        (dCache.closePrice, dCache.twapPrice, dCache.closeSpread) = roxUtils.gClosePrice(
+                        _perpPool,
+                        _sizeDelta,
+                        position,
+                        false
+                    );
+                            
+        dCache.closeSpread -= 1000000;
+        
+        position.openSpread -= 1000000;
+
+        TradeData.RoguFeeSlot memory rgFs = IRoxPerpPool(_perpPool).rgFeeSlot();
+        // collect funding fee and uncollect fee based on full position size
+        {
+            dCache.posFee = 
+                position.long0 
+                ?
+                uint256(rgFs.fundFeeAccum0) + (block.timestamp - rgFs.time).mul(uint256(rgFs.fundFee0))
+                :
+                uint256(rgFs.fundFeeAccum1) + (block.timestamp - rgFs.time).mul(uint256(rgFs.fundFee1));
+
+            // collect funding fee
+            dCache.fee = FullMath.mulDiv(position.size, dCache.posFee - uint256(position.entryFdAccum), 1e9);
+
+            position.entryFdAccum = uint64(dCache.posFee);
+           
+            dCache.fee += position.uncollectFee;
+            dCache.fundingFee = dCache.fee;
+            // position.uncollectFee = 0;//do not clear here
+
+            dCache.posFee = roxUtils.collectPosFee(position.size, IRoxPerpPool(_perpPool).spotPool());
+        }
+        // Calculate PNL
+        (dCache.hasProfit, dCache.profitDelta) = TradeMath.getDelta(
+            position.long0,
+            uint256(position.entrySqrtPriceX96),
+            dCache.closePrice,
+            position.size
+        );
+        // Position validation
+        {
+            uint256 fullDec = dCache.fee +
+                dCache.posFee +
+                (dCache.hasProfit ? 0 : dCache.profitDelta);
+            if (fullDec >= position.collateral) {
+                _sizeDelta = position.size;
+                dCache.isLiq = true;
+            } 
+        }
+
+        if (dCache.isLiq) {
+            dCache.payBack = 0;
+            return (dCache, position, "liquidate");
+        }
+
+        {
+            if (_sizeDelta < position.size){
+                dCache.profitDelta = FullMath.mulDiv(_sizeDelta, dCache.profitDelta, position.size);
+                dCache.posFee = FullMath.mulDiv(_sizeDelta, dCache.posFee, position.size);
+            }
+            dCache.fee += dCache.posFee;
+
+
+            //collateral > fullDec + _collateralDelta as checked before.
+            if (dCache.hasProfit){
+                dCache.payBack += dCache.profitDelta;
+            }else{
+                position.collateral = position.collateral.sub(dCache.profitDelta);// size checked before
+            }
+
+            // settle fee
+            position.collateral = position.collateral.sub(dCache.fee);// size checked before
+            dCache.colAfterfee = dCache.origCollateral.sub(dCache.fee);
+
+            dCache.keepLevColDelta = FullMath.mulDiv(_sizeDelta, position.collateral, position.size);
+
+            if (dCache.del){
+                // pay remaining collateral back to trader
+                dCache.keepLevColDelta = position.collateral;
+            }
+            if (dCache.keepLevColDelta > 0){
+                position.collateral = position.collateral.sub(dCache.keepLevColDelta);
+                dCache.payBack += dCache.keepLevColDelta;
+            }
+        }
+
+        // valid max leverage
+        if (position.collateral > 0) {
+            position.size = position.size.sub(_sizeDelta);
+            if (position.collateral.mul(MAX_LEVERAGE) < position.size) {
+                dCache.payBack = 0;
+                return (dCache, position, "maxL");
+            }
+
+            (, , dCache.closeSpread) = roxUtils.gClosePrice(
+                        _perpPool,
+                        position.size,
+                        position,
+                        false
+                    );
+            dCache.closeSpread -= 1000000;
+
+            dCache.decLiqPrice = estimateLiqPrice(
+                        position.long0, 
+                        position.collateral, 
+                        position.entrySqrtPriceX96, 
+                        uint256(dCache.closeSpread),
+                        position.size
+                );
+        } else {
+            dCache.del = true;
+            _sizeDelta = position.size;
+            position.size = 0;
+        }
+
+        // settle fee
+        {
+            // trans. to sameside token
+            dCache.feeDist = position.long0
+                ? TradeMath.token1to0NoSpl(dCache.fee, dCache.twapPrice)
+                : TradeMath.token0to1NoSpl(dCache.fee, dCache.twapPrice);
+
+            if (dCache.feeDist > position.transferIn) {
+                dCache.feeDist = position.transferIn;
+            }
+            position.transferIn -= uint128(dCache.feeDist);
+        }
+
+        // Settle part Profit, Loss & Fees settlement
+        {
+            if (dCache.payBack > 0) {
+                dCache.payBack = position.long0
+                    ? TradeMath.token1to0NoSpl(
+                        dCache.payBack,
+                        dCache.twapPrice
+                    )
+                    : TradeMath.token0to1NoSpl(
+                        dCache.payBack,
+                        dCache.twapPrice
+                    );
+            }
+        }
+
+        return (dCache, position, "");
+    }
+
 
 
     function posDispInfo(
@@ -300,19 +500,20 @@ contract Reader {
             string memory message
         ) = estimateDecrease(_perpPool, 0, 0, _key);
 
-        (uint160 curPrice, , , , , , ) = IRoxSpotPool(IRoxPerpPool(_perpPool).spotPool()).slot0();
-
+        // (uint160 curPrice, , , , , , ) = IRoxSpotPool(IRoxPerpPool(_perpPool).spotPool()).slot0();
 
         posx.message = message;
         posx.pool = _perpPool;
         posx.account = position.account;
         posx.sqrtPriceX96 = position.entrySqrtPriceX96;
         posx.entryFundingFee = position.entryFdAccum;
+        posx.fundingFee = dCache.fundingFee;
+
         posx.size = dCache.origSize;
         posx.collateral = dCache.origCollateral;
         posx.long0 = position.long0;
         posx.openSpread = position.openSpread;
-        posx.liqResv = position.liqResv;
+        posx.uncollectFee = position.uncollectFee;
 
         posx.token0 = IRoxPerpPool(_perpPool).token0();
         posx.token1 = IRoxPerpPool(_perpPool).token1();
@@ -320,15 +521,12 @@ contract Reader {
         posx.fee = IRoxSpotPool(posx.spotPool).fee();
 
         posx.closeSqrtPriceX96 = dCache.closePrice;
-        posx.closeSpread = TradeMath.spread(
-            dCache.closePrice,
-            curPrice
-        );
+        posx.closeSpread = dCache.closeSpread;
         posx.isLiq = dCache.isLiq;
 
         posx.liqSqrtPriceX96 = estimateLiqPrice(
             posx.long0,
-            posx.collateral,
+            dCache.colAfterfee,
             posx.sqrtPriceX96,
             uint256(
                 posx.closeSpread >= 0 ? posx.closeSpread : -posx.closeSpread
@@ -341,64 +539,67 @@ contract Reader {
         posx.uncollectPerpFee = dCache.fee;
     }
 
-    struct IncreaseCache {
+    struct IncreaseCache{
         uint160 openPrice;
         int24 openTick;
-        int24 curTick;
+        // int24 curTick;
         uint32 curTime;
-        uint160 curPrice;
         uint16 posId;
+        uint160 twapPrice;
+        uint32 spread;
     }
 
     function estimateIncrease(
         address _perpPool,
         address _account,
-        uint256 _tokenDelta,
+        uint128 _tokenDelta,
         uint256 _sizeDelta,
         bool _long0
-        ) external view returns (TradeData.TradePosition memory position, uint256 liqPrice) {
+        ) external view returns (TradeData.TradePosition memory position, uint256 liqPrice, uint160 prevOpenPrice, uint256 prevLiqPrice) {
         bytes32 key = TradeMath.getPositionKey(_account, _perpPool, _long0);
         //> token0:p  token1:1/p
         position = IRoxPerpPool(_perpPool).getPositionByKey(key);
         IncreaseCache memory iCache;
-    
+        address spotPool = IRoxPerpPool(_perpPool).spotPool();
         // Long0:
         //  collateral & size: token1
         //  reserve & transferin : token0
+        prevOpenPrice = position.entrySqrtPriceX96;
+
         if (position.size.add(_sizeDelta) <1)   
-            return (position, 0);
+            return (position, 0, prevOpenPrice, 0);
+
+
+        DispData.DispTradePosition memory posx = posDispInfo(_perpPool, key);
+
+        prevLiqPrice = posx.liqSqrtPriceX96;
+
+  
         // uint256 iCache.curPrice = roxUtils.getSqrtTwapX96(spotPool, 3);
-        (iCache.openPrice, iCache.openTick, iCache.curPrice, iCache.curTick) 
+        (iCache.openPrice, iCache.openTick, iCache.twapPrice, iCache.spread) 
             = roxUtils.gOpenPrice(
                 _perpPool,
                 _sizeDelta,
                 _long0, 
                 false);
-
         // Update Collateral
         {
             //transfer in collateral is same as long direction
             if (_tokenDelta > 0){
-                uint256 lR = _tokenDelta.mul(95).div(100);
-                position.transferIn += lR;
-                position.liqResv += _tokenDelta - lR;
+                position.transferIn = position.transferIn.addu128(_tokenDelta);
+                // (, int256 a0, int256 a1, , ) = roxUtils.estimate(spotPool, _long0, int256(lR), IRoxSpotPool(spotPool).fee());
 
                 if (_long0){
-                    uint256 _colDelta = TradeMath.token0to1NoSpl(lR, uint256(iCache.curPrice));
+                    uint256 _colDelta = TradeMath.token0to1NoSpl(_tokenDelta, uint256(iCache.twapPrice));
                     position.collateral = position.collateral.add(_colDelta);
-                    //Temp. not used
-                    // position.colLiquidity += SqrtPriceMath.getLiquidityAmount0(
-                    //         iCache.openPrice, 
-                    //         TickMath.getSqrtRatioAtTick( iCache.openTick - 10), 
-                    //         _colDelta, false) * 10;
+                    // require(a0 > 0 && uint256(a0) == lR && a1 < 0, "iL0");
+                    // position.collateral = position.collateral.add(uint256(-a1));
                 }
                 else{
-                    uint256 _colDelta = TradeMath.token1to0NoSpl(lR, uint256(iCache.curPrice));
+                    uint256 _colDelta = TradeMath.token1to0NoSpl(_tokenDelta, uint256(iCache.twapPrice));
                     position.collateral = position.collateral.add(_colDelta);
-                    // position.colLiquidity += SqrtPriceMath.getLiquidityAmount1(
-                    //         iCache.openPrice, 
-                    //         TickMath.getSqrtRatioAtTick( iCache.openTick + 10), 
-                    //         _colDelta, false) * 10;
+                    // require(a1 > 0 && uint256(a1) == lR && a0 < 0, "iL1");
+                    // position.collateral = position.collateral.add(uint256(-a0));
                 }
             }
         }
@@ -411,29 +612,32 @@ contract Reader {
                 position.account = _account;
                 position.long0 = _long0;
                 position.entrySqrtPriceX96 = iCache.openPrice;
-                // position.entryLiq0 = IRoxSpotPool(spotPool).liqAccum0();
-                // position.entryLiq1 = IRoxSpotPool(spotPool).liqAccum1();
-
+                // position.entryIn0 = IRoxSpotPool(spotPool).tInAccum0();
+                // position.entryIn1 = IRoxSpotPool(spotPool).tInAccum1();
+                position.openSpread = iCache.spread;
                 position.entryPos = PosRange.tickToPos(iCache.openTick);
 
-                // if (_long0){
-                //     l0activeMap.setActive(position.entryPos);
-
-                //     // l0pos[position.entryPos].add(key);
-                //     // l0pos.add(key);
-                //     // if (!l0active.contains(position.entryPos))
-                //         // l0active.add(position.entryPos);
-                //     // l0posMap.iPosMap(position.entryPos, l0pos[position.entryPos].length());
-                // }else{
-                //     l1activeMap.setActive(position.entryPos);
-                //     // l1pos[position.entryPos].add(key);
-                //     // l1pos.add(key);
-                //     // if (!l1active.contains(position.entryPos))
-                //         // l1active.add(position.entryPos);
-                //     // l1posMap.iPosMap(position.entryPos, l1pos[position.entryPos].length());
-                // }
             }
             else if (position.size > 0 && _sizeDelta > 0){
+  
+                // Update funding fee rate after reserve amount changed.
+                {
+                    TradeData.RoguFeeSlot memory rgFs = IRoxPerpPool(_perpPool).rgFeeSlot();
+                    // (uint64 acum0, uint64 acum1) = updateFundingRate();
+                    uint64 curAcum = 
+                                position.long0 ?
+                                rgFs.fundFeeAccum0 + uint64(uint256(iCache.curTime - rgFs.time) * (uint256(rgFs.fundFee0)))
+                                :
+                                rgFs.fundFeeAccum1 + uint64(uint256(iCache.curTime - rgFs.time) * (uint256(rgFs.fundFee1)));
+                    if (position.entryFdAccum > 0){
+                        uint256 _ufee = FullMath.mulDiv(position.size, uint256(curAcum - position.entryFdAccum), 1e9);
+                        require(position.collateral > _ufee, "uCol");
+                        position.collateral -= _ufee;
+                        position.uncollectFee = position.uncollectFee.addu128(uint128(_ufee));
+                    }
+                    position.entryFdAccum = curAcum; 
+                }
+                
                 position.entrySqrtPriceX96 = uint160(TradeMath.nextPrice(
                                 position.size,
                                 position.entrySqrtPriceX96,
@@ -441,36 +645,51 @@ contract Reader {
                                 _sizeDelta
                             ) );
 
+                position.entryIn0 = uint160(TradeMath.weightAve(
+                                position.size,
+                                position.entryIn0,
+                                _sizeDelta,
+                                IRoxSpotPool(spotPool).tInAccum0()
+                            ) );
+
+                position.entryIn1 = uint160(TradeMath.weightAve(
+                                position.size,
+                                position.entryIn1,
+                                _sizeDelta,
+                                IRoxSpotPool(spotPool).tInAccum1()
+                            ) );
+
+                position.openSpread = uint32(TradeMath.weightAve(
+                                position.size,
+                                position.openSpread,
+                                _sizeDelta,
+                                iCache.spread
+                            ) );
+
                 iCache.posId = PosRange.tickToPos(
                                     TickMath.getTickAtSqrtRatio(position.entrySqrtPriceX96));
 
                 
             }
-            position.openSpread = TradeMath.spread(position.entrySqrtPriceX96, iCache.curPrice);
         }
         position.size += _sizeDelta;
-        
-        roxUtils.validPosition(position.collateral, position.size);
+        roxUtils.validPosition(position.collateral, position.size, spotPool);
 
 
-        (uint160 closePrice, ) = roxUtils.gClosePrice(
+        ( , , uint24 closeSpread) = roxUtils.gClosePrice(
                     _perpPool,
-                    _sizeDelta,
+                    position.size,
                     position,
                     false
                 );
 
-        int32 closeSpread = TradeMath.spread(
-            closePrice,
-            iCache.curPrice
-        );
+        closeSpread -= 1000000;
+        position.openSpread -= 1000000;
         liqPrice = estimateLiqPrice(
                 _long0, 
                 position.collateral, 
                 position.entrySqrtPriceX96, 
-                uint256(
-                    closeSpread >= 0 ? closeSpread : -closeSpread
-                ),        
+                uint256(closeSpread),
                 position.size
         );
     }
@@ -530,10 +749,10 @@ contract Reader {
         _fee.reserve1 = IRoxPerpPool(_tradePool).reserve1();
 
         TradeData.RoguFeeSlot memory rgFS = IRoxPerpPool(_tradePool).rgFeeSlot();
-        _fee.fundingFee0 = uint64(uint256(rgFS.fundFee0).mul(3600).div(1e3));
-        _fee.fundingFee1 = uint64(uint256(rgFS.fundFee1).mul(3600).div(1e3));
+        _fee.fundingFee0 = uint64(uint256(rgFS.fundFee0).mul(3600) / (1e3));
+        _fee.fundingFee1 = uint64(uint256(rgFS.fundFee1).mul(3600) / (1e3));
 
-        _fee.positionFee = roxUtils.positionFeeBasisPoint();
+        _fee.positionFee = IRoxSpotPool(_fee.spotPool).fee();
         // uint256 premiumLong0perHour;
         // uint256 premiumLong1perHour;
     }
@@ -574,8 +793,10 @@ contract Reader {
         uint256 spreadEstimated,
         uint256 size
     ) public pure returns (uint256 liqPriceSqrtX96) {
-        require(collateral > 0, "0 collateral");
-        require(size > 0, "0 size");
+        if (size < 1  || collateral < 1)
+            return 0;
+
+
         uint256 pRg = FullMath.mulDiv(collateral, 1000000, size);
         pRg = pRg > spreadEstimated ? pRg - spreadEstimated : 0;
 
@@ -591,7 +812,6 @@ contract Reader {
                     )
                 );
             }
-
             // return (_entryPriceSqrt > slpPrice ? _entryPriceSqrt.sub(slpPrice) : 0, closePrice);
         } else {
             liqPriceSqrtX96 = TradeMath.sqrt(
@@ -621,7 +841,8 @@ contract Reader {
         (sqrtPrice, amount0, amount1, endTick, endLiq) = roxUtils.estimate(
             spotPool,
             zeroForOne,
-            amountSpecified
+            amountSpecified,
+            IRoxSpotPool(spotPool).fee()
         );
         resv = 1000000;
         if (zeroForOne){            

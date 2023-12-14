@@ -14,7 +14,9 @@ contract RoxSpotPoolDeployer is IRoxSpotPoolDeployer {
         address token0;
         address token1;
         uint24 fee;
-        int24 tickSpacing;
+        address perpPool;
+        address posnPool;
+        address roxUtils;
     }
     constructor(address _deployFactory){
         deployFactory = _deployFactory;
@@ -28,16 +30,17 @@ contract RoxSpotPoolDeployer is IRoxSpotPoolDeployer {
     /// @param token0 The first token of the pool by address sort order
     /// @param token1 The second token of the pool by address sort order
     /// @param fee The fee collected upon every swap in the pool, denominated in hundredths of a bip
-    /// @param tickSpacing The spacing between usable ticks
     function deploy(
         address factory,
         address token0,
         address token1,
         uint24 fee,
-        int24 tickSpacing
+        address perpPool,
+        address posnPool,
+        address roxUtils
     ) external override returns (address pool) {
         require(deployFactory == msg.sender, "F");
-        parameters = Parameters({factory: factory, token0: token0, token1: token1, fee: fee, tickSpacing: tickSpacing});
+        parameters = Parameters({factory: factory, token0: token0, token1: token1, fee: fee, perpPool:perpPool, posnPool:posnPool, roxUtils:roxUtils});
         pool = address(new RoxSpotPool{salt: keccak256(abi.encode(token0, token1, fee))}());
         delete parameters;
     }

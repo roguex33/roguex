@@ -9,11 +9,8 @@ import "./FullMath.sol";
 
 library PosRange {
     using SafeMath for uint256;
-    uint8 internal constant RESOLUTION = 96;
-    uint256 internal constant Q96 = 0x1000000000000000000000000;
-    uint256 public constant ltprec = 1e12;
-    uint256 public constant PS_SPACING = 100000;
-    uint256 public constant PR_SPACING = 600;
+    // uint8 internal constant RESOLUTION = 96;
+    // uint256 internal constant Q96 = 0x1000000000000000000000000;
     uint256 public constant PRICE_SPACING = 100; //1.0001^100 > 1%   17745 ranges > 70x 256 bit map
 
     //trade position range part

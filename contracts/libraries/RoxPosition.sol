@@ -67,7 +67,7 @@ library RoxPosition {
                 TickMath.getSqrtRatioAtTick(tickLower),
                 TickMath.getSqrtRatioAtTick(tickUpper),
                 liquidityDelta,
-                false
+                true
             );
         } else if (curTick < tickUpper) {
             // current tick is inside the passed range
@@ -75,13 +75,13 @@ library RoxPosition {
                 sqrtPriceX96,
                 TickMath.getSqrtRatioAtTick(tickUpper),
                 liquidityDelta,
-                false
+                true
             );
             amount1 = SqrtPriceMath.getAmount1Delta(
                 TickMath.getSqrtRatioAtTick(tickLower),
                 sqrtPriceX96,
                 liquidityDelta,
-                false
+                true
             );
         } else {
             // current tick is above the passed range; liquidity can only become in range by crossing from right to
@@ -90,7 +90,7 @@ library RoxPosition {
                 TickMath.getSqrtRatioAtTick(tickLower),
                 TickMath.getSqrtRatioAtTick(tickUpper),
                 liquidityDelta,
-                false
+                true
             );
         }
     }

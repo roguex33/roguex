@@ -69,15 +69,10 @@ interface IRoguexFactory {
     function hypervisorFactory() external view returns (address);
     function perpPoolDeployer() external view returns (address);
     function posnPoolDeployer() external view returns (address);
+    function spotOwner(address) external view returns (address);
 
     function utils( ) external view returns (address pool);
     function weth( ) external view returns (address);
-
-
-    function spotThres( ) external view returns (uint256);
-    function liqdThres( ) external view returns (uint256);
-    function perpThres( ) external view returns (uint256);
-    function setlThres( ) external view returns (uint256);
 
 
     function approvedNftRouters(address router) external view returns (bool);
@@ -105,9 +100,4 @@ interface IRoguexFactory {
     /// @param _owner The new owner of the factory
     function setOwner(address _owner) external;
 
-    /// @notice Enables a fee amount with the given tickSpacing
-    /// @dev Fee amounts may never be removed once enabled
-    /// @param fee The fee amount to enable, denominated in hundredths of a bip (i.e. 1e-6)
-    /// @param tickSpacing The spacing between ticks to be enforced for all pools created with the given fee amount
-    function enableFeeAmount(uint24 fee, int24 tickSpacing) external;
 }

@@ -9,7 +9,53 @@ import '../libraries/RoxPosition.sol';
 
 
 interface IRoxPosnPool {
-   
+    function timeSlots(uint) external view returns (uint256);
+
+    function priceSlot(
+        uint256 psId
+    ) external view returns (uint256);
+    function timeSlot(uint psId) external view returns (uint256);
+
+    function prInfo(
+        uint256 timePr
+    ) external view returns (PriceRange.FeeInfo memory);
+
+    function encodeSlots(
+        uint256 prStart, uint256 prEnd, bool isPrice
+    ) external view returns (uint256[] memory);
+    
+    function updateSwapFee(
+        int24 tick,
+        bool zeroForOne,
+        uint256 feeX128,
+        uint256 liquidity
+    ) external;
+
+
+    function writePriceSlot(
+            uint16 _psId,
+            uint256 _priceSlot) external;
+
+    function writeTimeSlot(
+            uint16 _psId,
+            uint256 _timeSlot) external;
+
+    function updatePerpFee(
+        uint256 cacheTime,
+        uint256 curTime,
+        uint16 pr,
+        uint256 price,
+        uint256 liq,
+        uint256 feeDelta,
+        bool long0) external;
+
+
+
+
+
+
+
+
     function positions(bytes32 key)
         external
         view

@@ -21,9 +21,8 @@ contract ROXToken {
         _mint(msg.sender, 0);
     }
 
-    //TODO:
     function setMinter(address _minter) external {
-        // require(msg.sender == minter);
+        require(msg.sender == minter);
         minter = _minter;
     }
 

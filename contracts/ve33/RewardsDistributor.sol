@@ -490,9 +490,8 @@ contract RewardsDistributor {
         return true;
     }
 
-    // TODO:
     function setDepositor(address _depositor) external {
-        // require(msg.sender == depositor);
+        require(msg.sender == depositor,"NOT depositor");
         depositor = _depositor;
     }
 }

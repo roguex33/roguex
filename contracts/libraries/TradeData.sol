@@ -14,33 +14,38 @@ library TradeData {
         uint64 fundFeeAccum1;
         uint32 fundFee0;
         uint32 fundFee1;
+        uint24 spotFee;
     }
 
 
 
     struct TradePosition {
         address account;
+        uint64 entryFdAccum;
 
         uint160 entrySqrtPriceX96;
-        uint64 entryFdAccum;
+        bool long0;
+        uint16 entryPos;
+        uint32 openSpread;
+        uint32 openTime;
         
         uint256 size;
         uint256 collateral;
-        uint256 reserve;
-        uint256 liqResv;
 
-        uint256 uncollectFee;
-        uint256 transferIn;
+        // uint128 sizeLiquidity;
+        // uint128 liqResv;
 
-        uint256 entryLiq0;  //sum
-        uint256 entryLiq1;  //sum
+        uint128 reserve;
+        uint128 reserveMax;
+
+        uint128 uncollectFee;
+        uint128 transferIn;
+
+        uint256 entryIn0;  //sum
+        uint256 entryIn1;  //sum
 
         // Liquidity record part
         // uint128 colLiquidity;
-        uint128 sizeLiquidity;
-        uint16 entryPos;
-        int32 openSpread;
-        bool long0;
         // uint256 feeCollect;
     }
     
@@ -80,12 +85,5 @@ library TradeData {
         uint256 feeAmount;
     }
 
-    struct OpenPricState {
-        uint160 openPrice;
-        int24 openTick;
-        int24 curTick;
-        uint160 curPrice;
-        uint160 sqrtPriceX96;
-    }
     
 }

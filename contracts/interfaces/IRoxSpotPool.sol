@@ -21,8 +21,8 @@ interface IRoxSpotPool is
     function roxPerpPool() external view returns (address);
     function roxPosnPool() external view returns (address);
     
-    function liqAccum0() external view returns (uint256);
-    function liqAccum1() external view returns (uint256);
+    function tInAccum0() external view returns (uint256);
+    function tInAccum1() external view returns (uint256);
 
     function l0rec() external view returns (uint256);
     function l1rec() external view returns (uint256);

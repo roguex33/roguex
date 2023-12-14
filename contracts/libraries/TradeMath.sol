@@ -6,7 +6,6 @@ import "../libraries/BitMath.sol";
 import "../libraries/SqrtPriceMath.sol";
 import "../libraries/LowGasSafeMath.sol";
 import "./FullMath.sol";
-// import "hardhat/console.sol";
 
 library TradeMath {
     using LowGasSafeMath for uint256;
@@ -91,12 +90,16 @@ library TradeMath {
         }
     }
 
-    function sqrt(uint x) internal pure returns (uint y) {
-        uint z = (x + 1) / 2;
-        y = x;
-        while (z < y) {
-            y = z;
-            z = (x / z + z) / 2;
+    function sqrt(uint y) internal pure returns (uint z) {
+        if (y > 3) {
+            z = y;
+            uint x = y / 2 + 1;
+            while (x < z) {
+                z = x;
+                x = (y / x + x) / 2;
+            }
+        } else if (y != 0) {
+            z = 1;
         }
     }
 
@@ -126,6 +129,7 @@ library TradeMath {
         _entryPrice = FullMath.mulDiv(_entryPrice, _entryPrice, ampfP * ampfP); //_entryPrice / ampfP * _entryPrice / ampfP;
         _nextPrice = FullMath.mulDiv(_nextPrice, _nextPrice, ampfP * ampfP); //_nextPrice / ampfP * _nextPrice / ampfP;
 
+
         uint256 _sSum = _size + _sizeDelta;
         require(_sSum > 0, "eS");
         uint256 _tpp = FullMath.mulDiv(_entryPrice, _sizeDelta, _sSum) +
@@ -146,47 +150,40 @@ library TradeMath {
         return keccak256(abi.encodePacked(_account, _tradePool, _long0));
     }
 
-    function printInt(string memory str, int val) internal pure {
-        // if (val > 0) console.log(str, "+", uint256(val));
-        // else console.log(str, "-", uint256(-val));
-    }
+    // function printInt(string memory str, int val) internal pure {
+    //     // if (val > 0) console.log(str, "+", uint256(val));
+    //     // else console.log(str, "-", uint256(-val));
+    // }
 
     function token0to1NoSpl(
         uint256 _amount0,
         uint256 _sqrtPriceX96
     ) internal pure returns (uint256) {
-        return
-            FullMath.mulDiv(_sqrtPriceX96 * _sqrtPriceX96, _amount0, Q192);
+
+        if (_sqrtPriceX96 < 170141183460469231731687303715884105728){
+            return
+                FullMath.mulDiv(_sqrtPriceX96 * _sqrtPriceX96, _amount0, Q192);
+        }else{
+            uint256 ampfP = _sqrtPriceX96 / 170141183460469231731687303715884105728 + 1;
+            return
+                FullMath.mulDiv(FullMath.mulDiv(_sqrtPriceX96, _sqrtPriceX96, ampfP * ampfP), _amount0, Q192 / (ampfP * ampfP));
+        }
+
     }
 
     function token1to0NoSpl(
         uint256 _amount1,
         uint256 _sqrtPriceX96
     ) internal pure returns (uint256) {
-        return
-            FullMath.mulDiv(Q192, _amount1, _sqrtPriceX96 * _sqrtPriceX96);
-    }
 
-    function minU16(uint256[] memory pids) internal pure returns (uint256 val) {
-        val = 65535;
-        for (uint i = 0; i < pids.length; i++) {
-            if (pids[i] < val) val = pids[i];
+        if (_sqrtPriceX96 < 170141183460469231731687303715884105728){
+            return
+                FullMath.mulDiv(Q192, _amount1, _sqrtPriceX96 * _sqrtPriceX96);
+        }else{
+            uint256 ampfP = _sqrtPriceX96 / 170141183460469231731687303715884105728 + 1;
+            return
+                FullMath.mulDiv(Q192 / (ampfP * ampfP), _amount1, FullMath.mulDiv(_sqrtPriceX96, _sqrtPriceX96, ampfP * ampfP));
         }
     }
 
-    function maxU16(uint256[] memory pids) internal pure returns (uint256 val) {
-        val = 65535;
-        for (uint i = 0; i < pids.length; i++) {
-            if (pids[i] > val || val > 17747) val = pids[i];
-        }
-    }
-
-
-    function spread(
-        uint256 rPrice,
-        uint256 cPrice
-    ) internal pure returns (int32) {
-        int256 ratio = int256((1000000 * rPrice) / cPrice);
-        return int32((ratio * ratio - 1000000000000) / 1000000);
-    }
 }

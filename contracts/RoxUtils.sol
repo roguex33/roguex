@@ -17,72 +17,216 @@ import "./libraries/FullMath.sol";
 import "./libraries/TickMath.sol";
 import "./libraries/LiquidityMath.sol";
 import "./libraries/SwapMath.sol";
-
+import "hardhat/console.sol";
 
 contract RoxUtils is IRoxUtils {
     using LowGasSafeMath for uint256;
     using SafeCast for uint256;
     using SafeCast for int256;
+    address public immutable factory;
+    address public immutable override weth;
 
-    mapping(uint80 => string) public override errMsg;
-    uint256 public constant RATIO_PREC = 1e6;
-    uint256 public constant MAX_LEVERAGE = 80;
+    uint32 public countMin = 10; // minutes;
 
-
-    uint32 public twapTime = 5; //15 minutes;
-    uint32 public countMin = 10; //15 minutes;
-
-    uint256 public override marginFeeBasisPoint = 0.0001e6;
-    uint256 public override positionFeeBasisPoint = 0.002e6;
-    uint256 public override fdFeePerS = 6e3;
-
-    address public factory;
-    address public override weth;
     CloseFactor public cFt;
+    PoolSetting public gSetting;
+    mapping(address => PoolSetting) public poolSetting;
 
+    struct PoolSetting{
+        bool set;
+        uint8 maxLeverage;
+        uint16 spotThres;
+        uint16 perpThres;
+        uint16 setlThres;
+        uint32 fdFeePerS;
+        uint32 twapTime; 
+    }
+    
     struct CloseFactor{
-        uint256 kMax;
-        uint256 powF;
-        uint256 factor_s;
-        uint256 factor_sf;
+        uint32 timeSec;
+        uint16 kMax;
+        uint8 powF;
+        uint40 factor_s;
+        uint160 factor_sf;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == IRoguexFactory(factory).owner(), "nOW");
+        _;
     }
 
     constructor(address _factory, address _weth){
         factory = _factory;
         weth = _weth;
         cFt = CloseFactor({
-            kMax: 6,
+            timeSec : 60 minutes,
+            kMax: 320,
             powF : 2,
             factor_s : 1e4,
             factor_sf: 1e8
         });
-        // errMsg[0] = ""
+
+        gSetting = PoolSetting({
+            set : true,
+            maxLeverage : 51,
+            spotThres : 800,    // Default 80%, spot will be paused when perpResv / Liq.Total > spotThres 
+            perpThres : 500,    // Default 50%, open position be paused when perpResv / Liq.Total > perpThres
+            setlThres : 700,    // Default 70%,  when perpResv / Liq.Total > perpThres
+            fdFeePerS : 6e3,
+            twapTime : 5 seconds
+        } );
+    }
+
+    function setGlobalSetting(
+        uint8 _maxLeverage,
+        uint16 _spotThres,
+        uint16 _perpThres,
+        uint16 _setlThres,
+        uint32 _fdFeePerS,
+        uint32 _twapTime
+    ) external onlyOwner{
+        PoolSetting storage _gS = gSetting;
+        _gS.set = true;
+        require(_maxLeverage < 250);
+        _gS.maxLeverage;
+
+        require(_spotThres < 1001);
+        _gS.spotThres = _spotThres;
+
+        require(_perpThres < 1001);
+        _gS.perpThres = _perpThres;
+
+        require(_setlThres < 1001);
+        _gS.setlThres = _setlThres;
+
+        require(_fdFeePerS < 1e5);  // max 0.01% per sec.
+        _gS.fdFeePerS = _fdFeePerS; //cal: size * fdFeePerS / 1e9  per sec
+      
+        require(_twapTime < 180); 
+        _gS.twapTime = _twapTime; 
+    
+    }
+
+    function modifyPoolSetting(
+        address _spotPool, 
+        uint8 _maxLeverage,
+        uint16 _spotThres,
+        uint16 _perpThres,
+        uint16 _setlThres,
+        uint32 _fdFeePerS,
+        uint32 _twapTime,
+        bool _del
+        ) external {
+        require(msg.sender == IRoguexFactory(factory).spotOwner(_spotPool), "OW");
+        if (_del){
+            delete poolSetting[_spotPool];
+        }else{
+            PoolSetting memory _gS = gSetting;
+            require(_maxLeverage <= _gS.maxLeverage);
+            require(_spotThres <= _gS.spotThres);
+            require(_perpThres <= _gS.perpThres);
+            require(_setlThres <= _gS.setlThres);
+            require(_fdFeePerS <= _gS.fdFeePerS * 2);
+            require(_twapTime < 180); 
+
+            PoolSetting storage pSet = poolSetting[_spotPool];
+            pSet.set = true;
+            pSet.maxLeverage = _maxLeverage;
+            pSet.spotThres = _spotThres;
+            pSet.perpThres = _perpThres;
+            pSet.setlThres = _setlThres;
+            pSet.fdFeePerS = _fdFeePerS;
+            pSet.twapTime = _twapTime; 
+        }
     }
 
 
-    function setTime(uint32 _time) external {
-        require(msg.sender == IRoguexFactory(factory).owner(), "f-owner");
-        twapTime = _time;
-    }
 
-    function setFactor(uint256 _kMax, uint256 _powF, uint32 _countMin) external {
-        require(msg.sender == IRoguexFactory(factory).owner(), "f-owner");
+    function setTime(uint32 _countMin) external onlyOwner{
+        require(_countMin < (60 minutes) / 60, "count min");
         countMin = _countMin;
-        uint256 fs = 100**_powF;
-        cFt = CloseFactor({
-            kMax: _kMax,
-            powF : _powF,
-            factor_s : fs,
-            factor_sf: (fs)**_powF
-        });
-        // kMax = _kMax;
-        // powF = _powF;
     }
+
+    function setFactor(
+            uint256 _kMax, 
+            uint256 _powF, 
+            uint256 _timeSec
+            ) external onlyOwner{
+        require(_timeSec < 10 hours, "time max");
+        require(_kMax < 1001, "k max"); // ratio > k / 1000
+        require(_powF < 5, "max pow");  // ATTENTION:  overflow when pow > 4
+        uint256 fs = 100 ** _powF;
+        cFt = CloseFactor({
+            kMax: uint16(_kMax),
+            powF : uint8(_powF),
+            factor_s : uint40(fs),
+            factor_sf: uint160((fs)**_powF),
+            timeSec : uint32(_timeSec)
+        });
+    }
+
+
+
+
+    function spotThres(address _spotPool) public view override returns(uint256){
+        PoolSetting memory _pset = poolSetting[_spotPool];
+        uint256 _gSpotThres = uint256(gSetting.spotThres);
+        if (_pset.set){
+            return _pset.spotThres < _gSpotThres ? _pset.spotThres : _gSpotThres;
+        }else{
+            return _gSpotThres;
+        }
+    }
+    
+    function perpThres(address _spotPool) public view override returns(uint256){
+        PoolSetting memory _pset = poolSetting[_spotPool];
+        uint256 _gPerpThres = uint256(gSetting.perpThres);
+        if (_pset.set){
+            return _pset.perpThres < _gPerpThres ? _pset.perpThres : _gPerpThres;
+        }else{
+            return _gPerpThres;
+        }
+    }
+
+    function setlThres(address _spotPool) public view override returns(uint256){
+        PoolSetting memory _pset = poolSetting[_spotPool];
+        uint256 _gSetlThres = uint256(gSetting.setlThres);
+        if (_pset.set){
+            return _pset.spotThres < _gSetlThres ? _pset.spotThres : _gSetlThres;
+        }else{
+            return _gSetlThres;
+        }
+    }
+
+    function fdFeePerS(address _spotPool) public view override returns(uint256){
+        PoolSetting memory _pset = poolSetting[_spotPool];
+        uint256 _gFdFeePerS = uint256(gSetting.fdFeePerS);
+        if (_pset.set){
+            return _pset.fdFeePerS < _gFdFeePerS ? _pset.fdFeePerS : _gFdFeePerS;
+        }else{
+            return _gFdFeePerS;
+        }
+    }    
+
+
+    function maxLeverage(address _spotPool) public view override returns(uint256){
+        PoolSetting memory _pset = poolSetting[_spotPool];
+        uint256 _gMaxLeverage = uint256(gSetting.maxLeverage);
+        if (_pset.set){
+            return _pset.maxLeverage < _gMaxLeverage ? _pset.maxLeverage : _gMaxLeverage;
+        }else{
+            return _gMaxLeverage;
+        }
+    }
+
 
     function getSqrtTwapX96(
         address spotPool
     ) public view override returns (uint160 sqrtPriceX96) {
-        return getSqrtTwapX96Sec(spotPool, twapTime);
+
+        PoolSetting memory _pset = poolSetting[spotPool];
+ 
+        return getSqrtTwapX96Sec(spotPool, _pset.set ? _pset.twapTime : gSetting.twapTime);
     }
 
     function getSqrtTwapX96Sec(
@@ -117,13 +261,10 @@ contract RoxUtils is IRoxUtils {
 
         if (lte) {
             (int16 wordPos, uint8 bitPos) = TradeMath.tkPosition(compressed);
-            // all the 1s at or to the right of the current bitPos
             uint256 mask = (1 << bitPos) - 1 + (1 << bitPos);
             uint256 masked = IRoxSpotPool(spotPool).tickBitmap(wordPos) & mask;
 
-            // if there are no initialized ticks to the right of or at the current tick, return rightmost in the word
             initialized = masked != 0;
-            // overflow/underflow is possible, but prevented externally by limiting both tickSpacing and tick
             next = initialized
                 ? (compressed -
                     int24(bitPos - BitMath.mostSignificantBit(masked))) *
@@ -156,7 +297,8 @@ contract RoxUtils is IRoxUtils {
     function estimate(
         address spotPool,
         bool zeroForOne,
-        int256 amountSpecified
+        int256 amountSpecified,
+        uint24 fee
     )
         public
         view
@@ -166,7 +308,7 @@ contract RoxUtils is IRoxUtils {
         require(amountSpecified != 0, "AS");
         (uint160 sqrtPriceX96, int24 tick, , , , , ) = IRoxSpotPool(spotPool).slot0();
 
-        uint24 fee = IRoxSpotPool(spotPool).fee();
+        // uint24 fee = IRoxSpotPool(spotPool).fee();
 
         bool exactInput = amountSpecified > 0;
 
@@ -263,12 +405,11 @@ contract RoxUtils is IRoxUtils {
         int24 tickStart,
         bool isToken0,
         uint256 amount
-    ) public override view returns (uint256[] memory, uint256 latLiq, uint256 liqSum) {
-        // console.log("Check Amount : ", amount);
-        // if (isToken0)
-        //     require(tickStart >= curTick, "s<c:xstart");
-        // else 
-        //     require(tickStart <= curTick, "s>c:xstart");
+    ) public override view returns (uint256[] memory, uint128 latLiq, uint256 liqSum) {
+        if (isToken0)
+            require(tickStart >= curTick, "s<c:xstart");
+        else 
+            require(tickStart <= curTick, "s>c:xstart");
         TradeData.PriceRangeLiq memory prState;
         {
             prState.tick = curTick;
@@ -282,7 +423,6 @@ contract RoxUtils is IRoxUtils {
             liquidity: IRoxSpotPool(spotPool).liquidity()
         });
 
-        // TradeMath.printInt("curTick", state.tick);
         if (isToken0) {
             return calLiqSpecifiedAmount0(spotPool, state, prState);
         } else if (tickStart < state.tick) {
@@ -295,19 +435,15 @@ contract RoxUtils is IRoxUtils {
    function calLiqSpecifiedAmount0(
         address spotPool,
         TradeData.LiqCalState memory state,
-        TradeData.PriceRangeLiq memory prState) private view returns (uint256[] memory, uint256 endLiq, uint256 liqSum){
+        TradeData.PriceRangeLiq memory prState) private view returns (uint256[] memory, uint128 endLiq, uint256 liqSum){
         require(prState.tickStart >= state.tick, "xDir0");
-        // TradeMath.printInt("tickStart : ", prState.tickStart);
-        // TradeMath.printInt("tickState : ", state.tick);
         uint256[] memory tkList = new uint256[](3000);
-        // bool zeroForOne = false; //Direction:  --->  In:Token1, Out:Token0
 
         while (state.amountSpecifiedRemaining != 0) {
             require(state.liquidity > 0, "outOfLiq0");
             require(prState.curIdx < 2999, "out of range");
             TradeData.StepComputations memory step;
             step.sqrtPriceStartX96 = state.sqrtPriceX96;
-            // step.tickNext = PriceRange.
             (
                 step.tickNext,
                 step.initialized
@@ -348,14 +484,13 @@ contract RoxUtils is IRoxUtils {
                     tkList[(prState.curIdx+=1)] = state.amountSpecifiedRemaining;
                     prState.curIdx += 1;
                     state.amountSpecifiedRemaining = 0;
-                    liqSum += endLiq;
+                    liqSum += uint256(endLiq);
                     break;
                 }
             }
 
             if (step.initialized) {
                 (, int128 liquidityNet, , , ,) = IRoxSpotPool(spotPool).ticks(step.tickNext);
-                // console.log(int256(liquidityNet));
                 // if (zeroForOne) liquidityNet = - liquidityNet;
                 state.liquidity = LiquidityMath.addDelta(
                     state.liquidity,
@@ -378,13 +513,9 @@ contract RoxUtils is IRoxUtils {
         address spotPool,
         TradeData.LiqCalState memory state,
         TradeData.PriceRangeLiq memory prState
-    ) private view returns (uint256[] memory, uint256 endLiq,  uint256 liqSum) {
+    ) private view returns (uint256[] memory, uint128 endLiq,  uint256 liqSum) {
         uint256[] memory tkList = new uint256[](3000);
-        // bool zeroForOne = true; //Direction:  <---  In:Token0, Out:Token1
         require(prState.tickStart <= state.tick, "xDir1");
-        // TradeMath.printInt("tickStart : ", prState.tickStart);
-        // TradeMath.printInt("tickState : ", state.tick);
-        // TradeMath.printInt("tickStart: ", prState.tickStart);
         while (state.amountSpecifiedRemaining != 0) {            
             require(state.liquidity > 0, "outOfLiq0");
             require(prState.curIdx < 2999, "out of range");
@@ -407,8 +538,6 @@ contract RoxUtils is IRoxUtils {
                 step.tickNext = PriceRange.leftBoundaryTick(state.tick);
                 step.initialized = false;
             }
-            // console.log("prState.curIdx : ", prState.curIdx);
-            // TradeMath.printInt("stickNext: ", step.tickNext);
             step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.tickNext);
             if (step.tickNext < prState.tickStart && step.tickNext != state.tick) {
                 uint256 amounts =  LiquidityAmounts.getAmount1ForLiquidity(
@@ -419,7 +548,6 @@ contract RoxUtils is IRoxUtils {
                 tkList[prState.curIdx] = uint256(state.liquidity);
                 if (amounts < state.amountSpecifiedRemaining){
                     state.amountSpecifiedRemaining -= amounts;
-                    // console.log("liqF> : ", tkList[prState.curIdx]);
                     tkList[(prState.curIdx+=1)] = amounts;
                     prState.curIdx += 1;
                     liqSum += uint256(state.liquidity);
@@ -429,18 +557,16 @@ contract RoxUtils is IRoxUtils {
                             step.sqrtPriceNextX96,
                             state.sqrtPriceX96,
                             state.amountSpecifiedRemaining);
-                    // console.log("liqP> : ", tkList[prState.curIdx]);
                     tkList[(prState.curIdx+=1)] = state.amountSpecifiedRemaining;
                     prState.curIdx += 1;
                     state.amountSpecifiedRemaining = 0;
-                    liqSum += endLiq;
+                    liqSum += uint256(endLiq);
                     break;
                 }
             }
             
             if (step.initialized) {
                 (, int128 liquidityNet, , , ,) = IRoxSpotPool(spotPool).ticks(step.tickNext);
-                // console.log(int256(liquidityNet));
                 // if (zeroForOne) liquidityNet = - liquidityNet;
                 state.liquidity = LiquidityMath.addDelta(
                     state.liquidity,
@@ -450,112 +576,86 @@ contract RoxUtils is IRoxUtils {
             state.tick = step.tickNext - 1;
             state.sqrtPriceX96 = step.sqrtPriceNextX96;
         }
-        // console.log("lt0 bef: ", tkList[0] );
-        // console.log("lt1 bef: ", tkList[1] );
         // reverse from left to right
         uint256[] memory tkL = new uint256[](prState.curIdx);
         for (uint256 i = 0; i < prState.curIdx; i+=2) {
             tkL[i] = tkList[prState.curIdx - i - 2];
             tkL[i+1] = tkList[prState.curIdx - i - 1];
         }
-        // console.log("tk0 aft: ", tkL[0] );
-        
+
         return (tkL, endLiq, liqSum);
     }
 
-    function token0t1NoSpl(
+
+    function _estimateImpact(
         address _spotPool,
-        uint256 _amount0
-    ) public view returns (uint256) {
-        // protect from flash attach
-        return TradeMath.token0to1NoSpl(_amount0, uint256(getSqrtTwapX96Sec(_spotPool, 1)));
+        uint256 _estiDelta,
+        uint256 _revtDelta,
+        bool _long0
+    ) private view returns (uint256 spread){
+        ( , int256 amount0, int256 amount1, ,) = estimate(
+            _spotPool,
+            !_long0,
+            -int256(_estiDelta),
+            0
+        );
+
+
+        if (_long0){
+            // uint256 revtDelta = TradeMath.token0to1NoSpl(_estiDelta, curPrice);
+            require(amount1 > 0, "r1neg");
+            require(amount0 < 0 && _estiDelta == uint256(-amount0), "r0remained");
+            spread = uint256(amount1) > _revtDelta ?
+                FullMath.mulDiv(uint256(amount1), 1000000000000, _revtDelta)
+                :
+                1000001000000;
+        }else{
+            // uint256 revtDelta = TradeMath.token1to0NoSpl(_estiDelta, curPrice);
+            require(amount0 > 0, "r0neg");
+            require(amount1 < 0 && _estiDelta == uint256(-amount1), "r1remained");
+
+            spread = uint256(amount0) > _revtDelta ?
+                    FullMath.mulDiv(uint256(amount0), 1000000000000, _revtDelta)
+                    :
+                    1000001000000;
+        }
+        require(spread >= 1000000000000, "0spread");
     }
-
-    function token1t0NoSpl(
-        address _spotPool,
-        uint256 _amount1
-    ) public view returns (uint256) {
-        // protect from flash attach
-        return TradeMath.token1to0NoSpl(_amount1, uint256(getSqrtTwapX96Sec(_spotPool, 1)));
-    }
-
-
-
 
     function gOpenPrice(
-        address _roguPool,
+        address _perpPool,
         uint256 _sizeDelta,
         bool _long0,
         bool _isSizeCor
-    ) public view override returns (uint160, int24, uint160, int24) {
-        TradeData.OpenPricState memory ops;
-
-        {
-            address _spotPool = IRoxPerpPool(_roguPool).spotPool();
-            ops.openPrice = getSqrtTwapX96(_spotPool);
-            (ops.curPrice, ops.curTick, , , , , ) = IRoxSpotPool(_spotPool).slot0();
-            if (!_isSizeCor){
-                if (_long0)
-                    _sizeDelta = TradeMath.token1to0NoSpl(_sizeDelta, ops.curPrice);
-                else
-                    _sizeDelta = TradeMath.token0to1NoSpl(_sizeDelta, ops.curPrice);
-            }
-            int256 estiDelta = int256(_long0 ? 
-                        IRoxPerpPool(_roguPool).reserve0().add(_sizeDelta) / 2
-                        :
-                        IRoxPerpPool(_roguPool).reserve1().add(_sizeDelta) / 2);
-            (ops.sqrtPriceX96, , , ,) = estimate(
-                _spotPool,
-                !_long0,
-                -estiDelta
-            );
+    ) public view override returns (uint160 openPrice, int24 openTick, uint160 twapPrice, uint24 rtnSpread) {
+        // OpenPricState memory ops;
+        address _spotPool = IRoxPerpPool(_perpPool).spotPool();
+        twapPrice = getSqrtTwapX96(_spotPool);
+        (openPrice, , , , , , ) = IRoxSpotPool(_spotPool).slot0();
+        if (_long0){
+            if (!_isSizeCor)
+                _sizeDelta = TradeMath.token1to0NoSpl(_sizeDelta, openPrice);
+            _sizeDelta = IRoxPerpPool(_perpPool).reserve0().add(_sizeDelta) / 2;
         }
-
-
-
-        if (_long0) {
-            // uint256 _amounCt = globalLong0.add(_sizeDelta).div(2);
-            // (ops.sqrtPriceX96, , , ,) = estimate(
-            //     _spotPool,
-            //     !_long0,
-            //     - int256(
-            //         IRoxPerpPool(_roguPool).reserve0().add(_sizeDelta).div(2)
-            //     )
-            // );
-            require(ops.sqrtPriceX96 >= ops.curPrice, "Open>P");
-            ops.openPrice = ops.openPrice > ops.curPrice
-                ? ops.openPrice
-                : ops.curPrice;
-            // openPrice += FullMath.mulDiv(openPrice, uint256(sqrtPriceX96 - curPrice), curPrice);
-            ops.openPrice += ops.sqrtPriceX96 - ops.curPrice;
-        } else {
-            // (ops.sqrtPriceX96, , , ,) = estimate(
-            //     _spotPool,
-            //     !_long0,
-            //     - int256(
-            //         IRoxPerpPool(_roguPool).reserve1().add(_sizeDelta).div(2)
-            //     )
-            // );
-            require(ops.sqrtPriceX96 <= ops.curPrice, "Open<P");
-            ops.openPrice = ops.openPrice < ops.curPrice
-                ? ops.curPrice
-                : ops.openPrice;
-
-            ops.openPrice = ops.openPrice - (ops.curPrice - ops.sqrtPriceX96);
-            // ops.openPrice =
-            //     ops.openPrice -
-            //     uint160(
-            //         FullMath.mulDiv(
-            //             ops.openPrice,
-            //             uint256(ops.curPrice - ops.sqrtPriceX96),
-            //             ops.curPrice
-            //         )
-            //     ); //same
+        else{
+            if (!_isSizeCor)
+                _sizeDelta = TradeMath.token0to1NoSpl(_sizeDelta, openPrice);
+            _sizeDelta = IRoxPerpPool(_perpPool).reserve1().add(_sizeDelta) / 2;
         }
-        ops.openTick = TickMath.getTickAtSqrtRatio(ops.openPrice);
+        uint256 _revtDelta = _long0 ?
+                TradeMath.token0to1NoSpl(_sizeDelta, openPrice)
+                :
+                TradeMath.token1to0NoSpl(_sizeDelta, openPrice);
 
-        return (ops.openPrice, ops.openTick, ops.curPrice, ops.curTick);
+        uint256 spread256 = _estimateImpact(_spotPool, _sizeDelta, _revtDelta, _long0);
 
+        openPrice = _long0 ?
+            uint160(FullMath.mulDiv(uint256(twapPrice), TradeMath.sqrt(spread256), 1000000))
+            :
+            uint160(FullMath.mulDiv(uint256(twapPrice), 1000000, TradeMath.sqrt(spread256)));
+
+        openTick = TickMath.getTickAtSqrtRatio(openPrice);
+        rtnSpread = uint24(spread256 / 1000000);
     }
 
 
@@ -568,50 +668,62 @@ contract RoxUtils is IRoxUtils {
         TradeData.TradePosition memory tP;
         tP.long0 = _long0;
         tP.size = _sizeDelta;
-        (closePrice, ) = gClosePrice(_perpPool, _sizeDelta, tP, _isCor);
+        (closePrice, , ) = gClosePrice(_perpPool, _sizeDelta, tP, _isCor);
     }
 
     function gClosePrice(
-        address _roguPool,
+        address _perpPool,
         uint256 _sizeDelta,
         TradeData.TradePosition memory tP,
         bool _isCor
-    ) public view override returns (uint160 , uint160 ) {
-        address _spotPool = IRoxPerpPool(_roguPool).spotPool();
+    ) public view override returns (uint160 , uint160, uint24 ) {
+        address _spotPool = IRoxPerpPool(_perpPool).spotPool();
         uint256 twapPrice = getSqrtTwapX96(_spotPool);
-        uint256 closePrice = twapPrice;
-        (uint160 curPrice, , , , , , ) = IRoxSpotPool(_spotPool).slot0();
-
+        // uint256 closePrice = twapPrice;
+        // (uint160 curPrice, , , , , , ) = IRoxSpotPool(_spotPool).slot0();
         if (!_isCor){
             if (tP.long0)
-                _sizeDelta = TradeMath.token1to0NoSpl(_sizeDelta, curPrice);
+                _sizeDelta = TradeMath.token1to0NoSpl(_sizeDelta.add(tP.size), twapPrice);
             else
-                _sizeDelta = TradeMath.token0to1NoSpl(_sizeDelta, curPrice);
-        }
-
-        // uint256 closePrice 
-        // countSize is sm as position dir.
-        uint256 countSize = (_sizeDelta/2).add(countClose(_roguPool, tP.long0, countMin)); //globalLong0.div(2)
-        (uint160 sqrtPriceX96est, , , ,) = estimate(
-            _spotPool,
-            !tP.long0,
-            -int256(countSize)
-        ); //
-        if (tP.long0) {
-            require(sqrtPriceX96est > curPrice, "Close<P");
-            closePrice = twapPrice < curPrice ? twapPrice : curPrice;
-            closePrice = closePrice.sub(
-                _factor(_spotPool, tP, _sizeDelta, uint256(sqrtPriceX96est - curPrice))
-            );
-        } else {
-            require(sqrtPriceX96est < curPrice, "Close>P");
-            closePrice = twapPrice > curPrice ? twapPrice : curPrice;   
-            closePrice = closePrice.add(
-                _factor(_spotPool, tP, _sizeDelta, uint256(curPrice - sqrtPriceX96est))
-            );
+                _sizeDelta = TradeMath.token0to1NoSpl(_sizeDelta.add(tP.size), twapPrice);
+        }else{
+            if (tP.long0)
+                _sizeDelta = _sizeDelta.add(TradeMath.token1to0NoSpl(tP.size, twapPrice));
+            else
+                _sizeDelta = _sizeDelta.add(TradeMath.token0to1NoSpl(tP.size, twapPrice));
         }
         
-        return (uint160(closePrice), uint160(twapPrice));
+        uint256 spread_e12 = 1e12;
+        {
+            // countSize is sm as position dir.
+            uint256 countSize = (_sizeDelta/4).add(countClose(_perpPool, tP.long0, countMin)); //globalLong0.div(2)
+
+            uint256 _revtDelta = tP.long0 ?
+                    TradeMath.token0to1NoSpl(countSize, twapPrice)
+                    :
+                    TradeMath.token1to0NoSpl(countSize, twapPrice);
+
+            spread_e12 = _estimateImpact(_spotPool, countSize, _revtDelta, tP.long0);
+        }
+        uint256 closePrice = twapPrice;
+        if (tP.size > 0){
+            uint256 sqSprede6 = TradeMath.sqrt(spread_e12);
+
+            // long0 : 1 > 0, larger p
+            twapPrice = tP.long0 ? 
+                FullMath.mulDiv(twapPrice, 1000000 + FullMath.mulDiv(tP.collateral, sqSprede6 - 1000000, tP.size), 1000000)
+                :
+                FullMath.mulDiv(twapPrice, 1000000, 1000000 + FullMath.mulDiv(tP.collateral, sqSprede6 - 1000000, tP.size));
+
+            // twapPrice = tP.long0 ? 
+            //     FullMath.mulDiv(twapPrice, sqSprede6, 1000000)
+            //     :
+            //     FullMath.mulDiv(twapPrice, 1000000, sqSprede6);
+        }
+
+        (closePrice, spread_e12) = _factor(_spotPool, closePrice, tP, spread_e12);
+
+        return (uint160(closePrice), uint160(twapPrice), uint24(spread_e12 / 1000000));
     }
 
 
@@ -638,66 +750,97 @@ contract RoxUtils is IRoxUtils {
 
 
     function _factor(
-        address _spotPool, TradeData.TradePosition memory tP, uint256 _sizeDelta, uint256 _sqrtSpd) private view returns (uint256){
+        address _spotPool,
+        uint256 _twapPrice,
+        TradeData.TradePosition memory tP,
+        uint256 _sqrtSpd) private view returns (uint256, uint256){
+
+        uint256 closePrice = tP.long0 ?
+            uint160(FullMath.mulDiv(_twapPrice, 1000000, TradeMath.sqrt(_sqrtSpd)))
+            :
+            uint160(FullMath.mulDiv(_twapPrice, TradeMath.sqrt(_sqrtSpd), 1000000));
+
+
+        if ((tP.long0 && closePrice < tP.entrySqrtPriceX96)
+            || (!tP.long0 && closePrice > tP.entrySqrtPriceX96) ){       
+            return (closePrice, _sqrtSpd);
+        }
+
         CloseFactor memory _cf = cFt;
-        uint256 s = _cf.factor_sf;
-        uint256 a = IRoxSpotPool(_spotPool).liqAccum0().sub(tP.entryLiq0);
-        uint256 b = IRoxSpotPool(_spotPool).liqAccum1().sub(tP.entryLiq1);
-        if (tP.long0){
-            if (a > b && (tP.sizeLiquidity < (a + b))) {
-                s = FullMath.mulDiv(
-                    tP.sizeLiquidity,
-                    _sizeDelta,
-                    tP.size
-                );
-                s = FullMath.mulDiv(FullMath.mulDiv(s, a - b, a + b), _cf.factor_s, a + b);
-                // unchecked {
-                uint256 _k = (_cf.kMax * 3000) /
-                    IRoxSpotPool(_spotPool).fee();
-                console.log(">>> k ", _k);
-                // console.log(">>> fee ", IRoxSpotPool(_spotPool).fee());
-                s = (s ** _cf.powF) * _k + _cf.factor_sf;
-                // }
-            }else{
-                return _sqrtSpd;
+        uint256 s = uint256(_cf.factor_sf);
+        uint256 a = IRoxSpotPool(_spotPool).tInAccum0().sub(tP.entryIn0);
+        uint256 b = IRoxSpotPool(_spotPool).tInAccum1().sub(tP.entryIn1);
+        uint256 t = block.timestamp;
+        require(t >= tP.openTime, "xTime");
+        t = t.sub(tP.openTime);
+        console.log("Gap T: ", t);
+        if (tP.long0){ //Long0, size Dis token: token1, change size tk1 to 0
+            b = TradeMath.token1to0NoSpl(b, tP.entrySqrtPriceX96);
+            if (b > a && tP.reserve < (b + a) ) { // && (tP.size < (a + b))) {
+                // s = FullMath.mulDiv(FullMath.mulDiv(s, b - a, a + b), _cf.factor_s, a + b);
+                // s = FullMath.mulDiv(FullMath.mulDiv(tP.reserve, b - a, a + b), _cf.factor_s, a + b) **_cf.powF;
+                s = FullMath.mulDiv(b - a, uint256(_cf.factor_s), a + b) **uint256(_cf.powF);
+                uint256 pGap = uint256(closePrice).sub(tP.entrySqrtPriceX96);
+                closePrice = closePrice.sub(FullMath.mulDiv(uint256(_cf.kMax).mul(s), pGap, uint256(_cf.factor_sf) * 1000));
+                {
+                    uint256 tDur = uint256(_cf.timeSec).mul(b-a)/(a+b);
+                    if (t < tDur){
+                        uint256 cP2 =  uint256(tP.entrySqrtPriceX96).add( FullMath.mulDiv(t ** 5, pGap, tDur ** 5) );
+                        closePrice = cP2 < closePrice ? cP2 : closePrice;
+                    }
+                }
+
+                
+                _sqrtSpd = FullMath.mulDiv(_twapPrice, 1000000, closePrice)**2;
             }
         }
 
-        else{
-            if (a < b && (uint256(tP.sizeLiquidity) < (a + b))) {
-                s = FullMath.mulDiv(
-                    tP.sizeLiquidity,
-                    _sizeDelta,
-                    tP.size
-                );
-                s = FullMath.mulDiv(FullMath.mulDiv(s, b - a, a + b), _cf.factor_s, a + b);
-                uint256 _k = (_cf.kMax * 3000) /
-                    IRoxSpotPool(_spotPool).fee();
-                console.log(">>> k ", _k);
-                // console.log(">>> fee ", IRoxSpotPool(_spotPool).fee());
-                s = (s ** _cf.powF) * _k + _cf.factor_sf;
-            }else{
-                return _sqrtSpd;
+        else{// Long1, sizeDis 0 -> 1
+            a = TradeMath.token0to1NoSpl(a, tP.entrySqrtPriceX96);
+            if (a > b && tP.reserve < (a + b)) {
+                s = FullMath.mulDiv(a - b, uint256(_cf.factor_s), a + b) ** uint256(_cf.powF);
+                closePrice = closePrice.add(
+                        FullMath.mulDiv(
+                                uint256(_cf.kMax).mul(s), 
+                                uint256(tP.entrySqrtPriceX96).sub(closePrice),
+                                uint256(_cf.factor_sf) * 1000
+                                )
+                        );
+              
+                {
+                    uint256 pGap = uint256(tP.entrySqrtPriceX96).sub(closePrice);
+                    uint256 tDur = uint256(_cf.timeSec).mul(a-b)/(a+b);
+                    if (t < tDur){
+                        uint256 cP2 = FullMath.mulDiv(t ** 5, pGap, tDur ** 5) ;
+                        cP2 = uint256(tP.entrySqrtPriceX96).sub( cP2);
+                        closePrice = cP2 > closePrice ? cP2 : closePrice;
+                    }
+                }
+                _sqrtSpd = FullMath.mulDiv(closePrice, 1000000, _twapPrice)**2;
             }
         }
-        return FullMath.mulDiv(_sqrtSpd, s, _cf.factor_sf);
+
+        return (closePrice, _sqrtSpd);
     }
 
 
     function validPosition(
         uint256 collateral,
-        uint256 size
-    ) public override pure returns (bool){
+        uint256 size,
+        address spotPool
+    ) public override view returns (bool){
         require(collateral > 0, "empty collateral");
         require(size > collateral, "col > size");
-        require(collateral.mul(MAX_LEVERAGE) > size, "maxL");
+        require(collateral.mul(maxLeverage(spotPool)) > size, "maxL");
         return true;
     }
 
     function collectPosFee(
-        uint256 size
+        uint256 size,
+        address spotPool
     ) public override view returns (uint256){
-        return FullMath.mulDiv(positionFeeBasisPoint, size, RATIO_PREC);
+        uint256 fee = IRoxSpotPool(spotPool).fee() * 2; // 3000 for 0.3%
+        return FullMath.mulDiv(fee, size, 1000000);
     }
 
 }

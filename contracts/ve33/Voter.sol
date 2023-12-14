@@ -398,25 +398,6 @@ interface IPoolV3 {
     function token1() external view returns (address);
 }
 
-interface IRoguexFactory {
-    /// @notice Returns the current owner of the factory
-    /// @dev Can be changed by the current owner via setOwner
-    /// @return The address of the factory owner
-    function owner() external view returns (address);
-
-    /// @notice Returns the pool address for a given pair of tokens and a fee, or address 0 if it does not exist
-    /// @dev tokenA and tokenB may be passed in either token0/token1 or token1/token0 order
-    /// @param tokenA The contract address of either token0 or token1
-    /// @param tokenB The contract address of the other token
-    /// @param fee The fee collected upon every swap in the pool, denominated in hundredths of a bip
-    /// @return pool The pool address
-    function getPool(
-        address tokenA,
-        address tokenB,
-        uint24 fee
-    ) external view returns (address pool);
-}
-
 interface ISwapMinning {
     function notifyRewardAmount(address token, uint256 _amount) external;
 
@@ -442,7 +423,7 @@ interface IMasterChef {
     function getReward(address _account) external;
 }
 
-contract VoterV2 is Ownable {
+contract Voter is Ownable {
     address public immutable _ve; // the ve token that governs these .
     address internal immutable base;
 
@@ -454,8 +435,9 @@ contract VoterV2 is Ownable {
 
     uint internal constant DURATION = 7 days; // rewards are released over 7 days
     address public minter;
-
+    address public hypervisorFactory;
     address[] public pools; // all pools viable for incentives
+
     mapping(address => uint256) public gaugesDistributionTimestmap; // gauge    => last Distribution Time
     mapping(address => address) public masterChefs; // hypervisor=> gauge
     mapping(address => address) public gauges; // pool => gauge
@@ -540,7 +522,6 @@ contract VoterV2 is Ownable {
         votingRewardFactory = _votingRewardFactory;
         swapMinningFactory = _swapMinningFactory;
         swapRouter = _swapRouter;
-        minter = msg.sender;
         tradeRouter = _tradeRouter;
     }
 
@@ -552,6 +533,10 @@ contract VoterV2 is Ownable {
         _unlocked = 2;
         _;
         _unlocked = 1;
+    }
+
+    function setHypervisorFactory(address _f) external onlyManager {
+        hypervisorFactory = _f;
     }
 
     function setMinter(address _minter) external onlyManager {
@@ -720,8 +705,9 @@ contract VoterV2 is Ownable {
     function createGauge(
         address _pool,
         address _hypervisor
-    ) external lock returns (address, address, address) {
+    ) external returns (address, address, address) {
         require(gauges[_pool] == address(0x0), "exists");
+        require(msg.sender == hypervisorFactory, "not hypervisorFactory");
         address[] memory allowedRewards = new address[](3);
 
         address tokenA = IPoolV3(_pool).token0();
@@ -914,13 +900,6 @@ contract VoterV2 is Ownable {
                 tokenB,
                 _poolowed1
             );
-        }
-    }
-
-    //TODO: Test
-    function updateForFee(address[] memory _gauges) external {
-        for (uint i = 0; i < _gauges.length; i++) {
-            _updateForFee(_gauges[i]);
         }
     }
 

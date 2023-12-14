@@ -27,7 +27,7 @@ import "./interfaces/IERC20Minimal.sol";
 import "./interfaces/callback/IMintCallback.sol";
 import "./interfaces/callback/ISwapCallback.sol";
 import "./interfaces/IRoxPerpPool.sol";
-// import "hardhat/console.sol";
+import "./interfaces/IRoxUtils.sol";
 
 contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
     using LowGasSafeMath for uint256;
@@ -84,14 +84,15 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
     /// @inheritdoc IRoxSpotPoolState
     Oracle.Observation[65535] public override observations;
 
-    address public override roxPerpPool;
-    address public override roxPosnPool;
+    address public immutable override roxPerpPool;
+    address public immutable override roxPosnPool;
+    address public immutable roxUtils;
 
     uint256 public override l0rec;
     uint256 public override l1rec;
 
-    uint256 public override liqAccum0;
-    uint256 public override liqAccum1;
+    uint256 public override tInAccum0;
+    uint256 public override tInAccum1;
 
     /// @dev Mutually exclusive reentrancy protection into the pool to/from a method. This method also prevents entrance
     /// to a function before the pool is initialized. The reentrancy guard is required throughout the contract because
@@ -118,7 +119,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
 
 
     constructor() {
-        (factory, token0, token1, fee, ) = IRoxSpotPoolDeployer(msg.sender)
+        (factory, token0, token1, fee, roxPerpPool, roxPosnPool, roxUtils) = IRoxSpotPoolDeployer(msg.sender)
             .parameters();
         maxLiquidityPerTick = Tick.tickSpacingToMaxLiquidityPerTick(tickSpacing);
     }
@@ -221,9 +222,6 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
             feeProtocol: 0,
             unlocked: true
         });
-
-        roxPerpPool = IRoguexFactory(factory).getTradePool(token0, token1, fee);
-        roxPosnPool = IRoguexFactory(factory).getPositionPool(token0, token1, fee);
         emit Initialize(sqrtPriceX96, tick);
     }
 
@@ -528,7 +526,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
                 liquidityDelta: amount
             })
         );
-        uint256 liqdThres = IRoguexFactory(factory).liqdThres();
+        uint256 liqdThres = IRoxUtils(roxUtils).spotThres(address(this));
         (uint256 r0, uint256 r1) = availableReserve(true, true);
         require(r1 * liqdThres>= IRoxPerpPool(roxPerpPool).reserve1() * 1000, "0bn");
         require(r0 * liqdThres>= IRoxPerpPool(roxPerpPool).reserve0() * 1000, "1bn");
@@ -636,6 +634,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
             state.sqrtPriceX96 != sqrtPriceLimitX96
         ) {
             PoolData.StepComputations memory step;
+            require(state.liquidity > 0, "IS");
 
             step.sqrtPriceStartX96 = state.sqrtPriceX96;
 
@@ -709,7 +708,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
                 //     FixedPoint128.Q128,
                 //     state.liquidity
                 // );
-                IRoxPerpPool(roxPerpPool).updateSwapFee(state.tick, zeroForOne, step.feeAmount, state.liquidity);
+                IRoxPosnPool(roxPosnPool).updateSwapFee(state.tick, zeroForOne, step.feeAmount, state.liquidity);
             }
 
             // shift tick if we reached the next price
@@ -807,21 +806,10 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
                     recipient,
                     uint256(-amount1)
                 );
+                require(amount0 > 0, "a0");
                 l1rec = l1rec.sub(uint256(-amount1));
-                l0rec = l0rec.add(
-                    amount0 >= 0 ? uint256(amount0) : uint256(amount0)
-                );
-                int256 tkr = slot0Start.tick - slot0.tick;
-                if (tkr > 0) {
-                    liqAccum1 += uint256(
-                        SqrtPriceMath.getLiquidityAmount1(
-                            slot0Start.sqrtPriceX96,
-                            slot0.sqrtPriceX96,
-                            uint256(-amount1),
-                            false
-                        )
-                    ).mul(uint256(tkr));
-                }
+                l0rec = l0rec.add(uint256(amount0));
+                tInAccum0 = tInAccum0.add(uint256(amount0));
             }
             uint256 balance0Before = balance0();
             ISwapCallback(msg.sender).swapCallback(
@@ -837,21 +825,10 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
                     recipient,
                     uint256(-amount0)
                 );
+                require(amount1 > 0, "a1");
                 l0rec = l0rec.sub(uint256(-amount0));
-                l1rec = l1rec.add(
-                    amount1 >= 0 ? uint256(amount1) : uint256(amount1)
-                );
-                int256 tkr = slot0.tick - slot0Start.tick;
-                if (tkr > 0) {
-                    liqAccum0 += uint256(
-                        SqrtPriceMath.getLiquidityAmount0(
-                            slot0Start.sqrtPriceX96,
-                            slot0.sqrtPriceX96,
-                            uint256(-amount0),
-                            false
-                        )
-                    ).mul(uint256(tkr));
-                }
+                l1rec = l1rec.add(uint256(amount1));
+                tInAccum1 = tInAccum1.add(uint256(amount1));
             }
             uint256 balance1Before = balance1();
             ISwapCallback(msg.sender).swapCallback(
@@ -861,7 +838,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
             );
             require(balance1Before.add(uint256(amount1)) <= balance1(), "IIA");
         }
-
+        require(state.liquidity > 0, "IS");
         emit Swap(
             msg.sender,
             recipient,
@@ -873,7 +850,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
         );
 
         // zeroForOne: -true for token0 to token1, false for token1 to token0
-        uint256 spotThres = IRoguexFactory(factory).spotThres();
+        uint256 spotThres = IRoxUtils(roxUtils).spotThres(address(this));
         if (zeroForOne) { //token 1 decrease and only valid token 1
             (, uint256 r1) = availableReserve(false, true);
             require(r1 * spotThres  >= IRoxPerpPool(roxPerpPool).reserve1() * 1000, "t1s");

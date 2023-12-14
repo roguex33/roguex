@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity =0.7.6;
 
+import "./libraries/PoolAddress.sol";
 import "./interfaces/IRoguexFactory.sol";
 import "./interfaces/IRoxSpotPool.sol";
 import "./interfaces/IRoxSpotPoolDeployer.sol";
@@ -55,12 +56,9 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
     mapping(address => bool) public override approvedPerpPool;
     mapping(address => bool) public override approvedSpotPool;
 
+    mapping(address => address) public spotCreator;
+    mapping(address => address) private _spotOwner;
 
-
-    uint256 public override spotThres = 800; // Default 80%, spot will be paused when perpResv / Liq.Total > spotThres 
-    uint256 public override liqdThres = 800; // Default 80%, decrease liq. will be paused when perpResv / Liq.Total > liqdThres 
-    uint256 public override perpThres = 500; // Default 50%, open position be paused when perpResv / Liq.Total > perpThres
-    uint256 public override setlThres = 700; // Default 70%,  when perpResv / Liq.Total > perpThres
 
 
     modifier onlyOwner() {
@@ -80,22 +78,23 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
         emit FeeAmountEnabled(10000, 600);
     }
 
-    function setSpotThres(uint256 _spotThres) external onlyOwner{
-        require(_spotThres <= 1000);
-        spotThres = _spotThres;
+
+    function spotOwner(address _spotPool) public override view returns (address){
+        address _ow =  _spotOwner[_spotPool];
+        return _ow == address(0) ? owner : _ow;
     }
 
-    function setLiqdThres(uint256 _liqdThres) external onlyOwner{
-        require(_liqdThres <= 1000);
-        liqdThres = _liqdThres;
+    function transferOwner(address _pool, address _new) external{
+        require(spotOwner(_pool) == msg.sender, "not creator");
+        _spotOwner[_pool] = _new;
     }
 
-    function setPerpThres(uint256 _perpThres) external onlyOwner{
-        require(_perpThres <= 1000);
-        perpThres = _perpThres;
+    function transferCreator(address _pool, address _new) external{
+        require(spotCreator[_pool] != address(0), "empty Pool");
+        require(spotCreator[_pool] == msg.sender, "not creator");
+        spotCreator[_pool] = _new;
     }
-
-
+    
     function setPerpRouter(address _router, bool _status) external onlyOwner {
         approvedPerpRouters[_router] = _status;
     }
@@ -137,16 +136,31 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
             ? (tokenA, tokenB)
             : (tokenB, tokenA);
         require(token0 != address(0));
-        int24 tickSpacing = feeAmountTickSpacing[fee];
-        require(tickSpacing != 0);
+        // int24 tickSpacing = feeAmountTickSpacing[fee];
+        // require(tickSpacing != 0);
         require(getPool[token0][token1][fee] == address(0));
         require(getTradePool[token0][token1][fee] == address(0));
+
+
+        PoolAddress.PoolKey memory _pKey = PoolAddress.PoolKey({
+                token0: token0,
+                token1: token1,
+                fee: fee
+            });
+        
+        // address _calSpot =  PoolAddress.computeAddress(spotPoolDeployer, _pKey);
+        address _calPerp =  PoolAddress.perpAddress(perpPoolDeployer, _pKey);
+        address _calPosn =  PoolAddress.posnAddress(posnPoolDeployer, _pKey);
+
+
         _pool = IRoxSpotPoolDeployer(spotPoolDeployer).deploy(
             address(this),
             token0,
             token1,
             fee,
-            tickSpacing
+            _calPerp,
+            _calPosn,
+            utils
         );
 
         _tradePool = IRoxPerpPoolDeployer(perpPoolDeployer).deploy(
@@ -154,14 +168,15 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
             token0,
             token1,
             fee,
-            tickSpacing,
             _pool,
-            utils
+            _calPosn
         );
+        require(_calPerp == _tradePool, "PerpAdd");
         approvedSpotPool[_pool] = true;
         approvedPerpPool[_tradePool] = true;
         getPool[token0][token1][fee] = _pool;
         getPool[token1][token0][fee] = _pool;
+        spotCreator[_pool] = msg.sender;
 
         getTradePool[token0][token1][fee] = _tradePool;
         getTradePool[token1][token0][fee] = _tradePool;
@@ -175,6 +190,7 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
             _pool,
             _tradePool
         );
+        require(_calPosn == _posPool, "PosnAdd");
 
         getPositionPool[token0][token1][fee] = _posPool;
         getPositionPool[token1][token0][fee] = _posPool;
@@ -189,7 +205,7 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
                 "Lp"
             );
         }
-        emit PoolCreated(token0, token1, fee, tickSpacing, _pool, _tradePool);
+        emit PoolCreated(token0, token1, fee, 600, _pool, _tradePool);
     }
 
     /// @inheritdoc IRoguexFactory
@@ -197,20 +213,6 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
         require(msg.sender == owner);
         emit OwnerChanged(owner, _owner);
         owner = _owner;
-    }
-
-    /// @inheritdoc IRoguexFactory
-    function enableFeeAmount(uint24 fee, int24 tickSpacing) public override {
-        require(msg.sender == owner);
-        require(fee < 1000000);
-        // tick spacing is capped at 16384 to prevent the situation where tickSpacing is so large that
-        // TickBitmap#nextInitializedTickWithinOneWord overflows int24 container from a valid tick
-        // 16384 ticks represents a >5x price change with ticks of 1 bips
-        require(tickSpacing > 0 && tickSpacing < 16384);
-        require(feeAmountTickSpacing[fee] == 0);
-
-        feeAmountTickSpacing[fee] = tickSpacing;
-        emit FeeAmountEnabled(fee, tickSpacing);
     }
 
 }

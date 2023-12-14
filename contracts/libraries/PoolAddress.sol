@@ -4,9 +4,9 @@ pragma solidity =0.7.6;
 /// @title Provides functions for deriving a pool address from the factory, tokens, and the fee
 library PoolAddress {
 
-    bytes32 internal constant SPOT_POOL_INIT_CODE_HASH = 0xbf627bf13ee5e0c664b744e4c008e101521cb670763bf486b40f332a4a38f2a6;//v0.7
-    bytes32 internal constant PERP_POOL_INIT_CODE_HASH = 0x9da91232a60f5261cf462c8a5610195aa2d7bdf32c190f07bd30c474c62b7fd2;//v0.7
-    bytes32 internal constant POSN_POOL_INIT_CODE_HASH = 0x9e2e4421580ac358a591c60450998c687be4abb6f6974958cefc5694b1c30b9a;//v0.7
+    bytes32 internal constant SPOT_POOL_INIT_CODE_HASH = 0xaaba347d274b9e7e2d195122c67b08b41f38d95a35b9eb67c46691cf10358366;//v0.7
+    bytes32 internal constant PERP_POOL_INIT_CODE_HASH = 0xfe75958c4585f6e53bb7f4cdc52b80113456129a4490d4b80dfd6968104b9c3e;//v0.7
+    bytes32 internal constant POSN_POOL_INIT_CODE_HASH = 0x0c4e166f9f335a3381e396fb85d30797c4fc1dc5746b2e637fa38b03c4f5c0ba;//v0.7
 
     /// @notice The identifying key of the pool
     struct PoolKey {
@@ -49,7 +49,7 @@ library PoolAddress {
         );
     }
 
-    function computePerpAddress(address perpDeployer, PoolKey memory key) internal pure returns (address pool) {
+    function perpAddress(address perpDeployer, PoolKey memory key) internal pure returns (address pool) {
         require(key.token0 < key.token1, "k:0<1");
         pool = address(
             uint256(
@@ -65,6 +65,20 @@ library PoolAddress {
         );
     }
 
-
+    function posnAddress(address posnDeployer, PoolKey memory key) internal pure returns (address pool) {
+        require(key.token0 < key.token1, "k:0<1");
+        pool = address(
+            uint256(
+                keccak256(
+                    abi.encodePacked(
+                        hex'ff',
+                        posnDeployer,
+                        keccak256(abi.encode(key.token0, key.token1, key.fee)),
+                        POSN_POOL_INIT_CODE_HASH
+                    )
+                )
+            )
+        );
+    }
 
 }
