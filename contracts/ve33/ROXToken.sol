@@ -1,34 +1,92 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity 0.8.12;
 
-contract ROXToken {
+interface IOwnable {
+    function manager() external view returns (address);
+
+    function renounceManagement() external;
+
+    function pushManagement(address newOwner_) external;
+
+    function pullManagement() external;
+}
+
+contract Ownable is IOwnable {
+    address internal _owner;
+    address internal _newOwner;
+
+    event OwnershipPushed(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
+    event OwnershipPulled(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
+
+    constructor() {
+        _owner = msg.sender;
+        emit OwnershipPushed(address(0), _owner);
+    }
+
+    function manager() public view override returns (address) {
+        return _owner;
+    }
+
+    modifier onlyManager() {
+        require(_owner == msg.sender, "Ownable: caller is not the owner");
+        _;
+    }
+
+    function renounceManagement() public virtual override onlyManager {
+        emit OwnershipPushed(_owner, address(0));
+        _owner = address(0);
+    }
+
+    function pushManagement(
+        address newOwner_
+    ) public virtual override onlyManager {
+        require(
+            newOwner_ != address(0),
+            "Ownable: new owner is the zero address"
+        );
+        emit OwnershipPushed(_owner, newOwner_);
+        _newOwner = newOwner_;
+    }
+
+    function pullManagement() public virtual override {
+        require(msg.sender == _newOwner, "Ownable: must be new owner to pull");
+        emit OwnershipPulled(_owner, _newOwner);
+        _owner = _newOwner;
+    }
+}
+
+
+contract ROXToken is Ownable{
     string public constant name = "ROX";
     string public constant symbol = "ROX";
     uint8 public constant decimals = 18;
     uint public totalSupply = 0;
 
+    mapping(address => bool) public isMinter;
     mapping(address => uint) public balanceOf;
     mapping(address => mapping(address => uint)) public allowance;
 
     bool public initialMinted;
-    address public minter;
 
     event Transfer(address indexed from, address indexed to, uint value);
     event Approval(address indexed owner, address indexed spender, uint value);
+    event SetMinter(address minter, bool status);
 
-    constructor() {
-        minter = msg.sender;
-        _mint(msg.sender, 0);
-    }
+    function setMinter(address _minter, bool _status) external onlyManager {
+        isMinter[_minter] = _status;
+        emit SetMinter(_minter, _status);
 
-    function setMinter(address _minter) external {
-        require(msg.sender == minter);
-        minter = _minter;
     }
 
     // Initial mint: total 50M
     function initialMint(address _recipient) external {
-        require(msg.sender == minter && !initialMinted);
+        require(msg.sender == manager() && !initialMinted);
         initialMinted = true;
         _mint(_recipient, 3333 * 1e4 * 1e18);
     }
@@ -85,7 +143,7 @@ contract ROXToken {
     }
 
     function mint(address account, uint amount) external returns (bool) {
-        require(msg.sender == minter, "not allowed");
+        require(isMinter[msg.sender], "not allowed");
         _mint(account, amount);
         return true;
     }

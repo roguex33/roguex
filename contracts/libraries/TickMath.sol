@@ -20,6 +20,7 @@ library TickMath {
         require(tickLower < tickUpper, 'TLU');
         require(tickLower >= MIN_TICK, 'TL');
         require(tickUpper <= MAX_TICK, 'TU');
+        require(tickUpper %600 ==0 && tickLower % 600==0 , 'T6');
     }
 
     /// @notice Calculates sqrt(1.0001^tick) * 2^96

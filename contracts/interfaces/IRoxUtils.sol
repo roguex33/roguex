@@ -11,15 +11,18 @@ interface IRoxUtils {
     function setlThres(address spotPool) external view returns (uint256);
     function fdFeePerS(address spotPool) external view returns (uint256);
     function maxLeverage(address spotPool) external view returns(uint256);
+    function pUtils() external view returns (address);
 
     function collectPosFee(
         uint256 size,
         address spotPool
-    ) external view returns (uint256);
+    ) external view returns (uint128);
 
     function getSqrtTwapX96(
         address spotPool
     ) external view returns (uint160 sqrtPriceX96);
+
+    function getTwapTickUnsafe(address _spotPool, uint32 _sec) external view returns (int24 tick);      
 
     function validPosition(
         uint256 collateral,
@@ -45,15 +48,16 @@ interface IRoxUtils {
     function weth( ) external view returns (address);
 
 
-    function getLiquidityArraySpecifiedStart(
+    function getLiqArray(
         address spotPool,
-        int24 curTick,
-        int24 tickStart,
         bool isToken0,
         uint256 amount
-    ) external  view returns (uint256[] memory, uint128,  uint256);
+    ) external view returns (uint256[] memory, uint128,  uint256, int24);
 
-
+    function availableReserve(
+        address _spotPool,
+        bool _l0, bool _l1
+        ) external view returns (uint256 r0, uint256 r1);
     // function getLiqs(
     //     address spotPool,
     //     int24 curTick,
@@ -82,9 +86,33 @@ interface IRoxUtils {
     //         bool long0, 
     //         uint256 sizeDelta) external view returns (uint256 openPriceSqrtX96);
 
+    function getDelta(
+        address _spotPool,
+        uint256 _closePriceSqrtX96,
+        TradeData.TradePosition memory tP) external view returns (bool hasProfit, uint128 profitDelta, uint128 factorDelta);
+
     function gOpenPrice(
         address roxPerpPool,
         uint256 sizeDelta,
         bool long0,
         bool isCor) external view returns (uint160 openPrice, int24 openTick, uint160 twapPrice, uint24 spread);
+
+    function modifyPoolSetting(
+        address _spotPool, 
+        uint8 _maxLeverage,
+        uint16 _spotThres,
+        uint16 _perpThres,
+        uint16 _setlThres,
+        uint32 _fdFeePerS,
+        uint32 _twapTime,
+        uint8 _countMin,
+        bool _del
+        ) external;
+
+    function gFdPs(
+        address _spotPool,
+        address _posnPool,
+        uint256 _reserve0,
+        uint256 _reserve1
+    ) external view returns (uint32, uint32);
 }

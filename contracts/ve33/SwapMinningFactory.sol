@@ -496,7 +496,9 @@ contract SwapMinning {
     }
 
     function notifyRewardAmount(address token, uint256 _amount) external {
-        require(_amount > 0, "amount not zero");
+        if (_amount < 1)
+            return;
+        // require(_amount > 0, "swamount not zero");
         require(token != address(0), "zero Token");
         if (!isReward[token]) {
             require(rewardTokens.length < 4, "not reward Token");

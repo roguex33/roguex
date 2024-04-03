@@ -31,65 +31,6 @@ library TradeMath {
         bitPos = uint8(tick % 256);
     }
 
-
-    function liqTrans(
-        uint128 entryLiq,
-        uint256 entryPrice,
-        uint256 curPrice
-    ) internal pure returns (uint128) {
-        require(entryPrice > 0, "p=0");
-        return
-            uint128(
-                FullMath.mulDiv(
-                    uint256(entryLiq),
-                    uint256(curPrice),
-                    uint256(entryPrice)
-                )
-            );
-    }
-
-    function getDelta(
-        bool _long0,
-        uint256 _openPriceSqrtX96,
-        uint256 _closePriceSqrtX96,
-        uint256 _size
-    ) internal pure returns (bool hasProfit, uint256 sizeDelta) {
-        require(_openPriceSqrtX96 > 0, "e3");
-
-        uint256 _openPriceX96 = FullMath.mulDiv(
-            _openPriceSqrtX96,
-            _openPriceSqrtX96,
-            Q96
-        );
-        uint256 _closePriceX96 = FullMath.mulDiv(
-            _closePriceSqrtX96,
-            _closePriceSqrtX96,
-            Q96
-        );
-
-        uint256 priceDelta = _openPriceX96 > _closePriceX96
-            ? _openPriceX96 - _closePriceX96
-            : _closePriceX96 - _openPriceX96;
-
-        //Long0 :
-        // delta = (P_0^close - P_0^open) / P_0^open
-        //Long1 :
-        // delta = (P_1^close - P_1^open) / P_1^open
-        //       = ( 1/P_0^close) - 1/P_0^open) / (1 / P_0^open)
-        //       = (P_0^open - P_0^close) / P_0^close
-        if (_long0) {
-            uint256 delta = FullMath.mulDiv(_size, priceDelta, _openPriceX96);
-            hasProfit = _closePriceX96 > _openPriceX96;
-            // priceDelta = FullMath.mulDiv(1000000, priceDelta, _openPriceX96);
-            return (hasProfit, delta);
-        } else {
-            hasProfit = _openPriceX96 > _closePriceX96;
-            uint256 delta = FullMath.mulDiv(_size, priceDelta, _closePriceX96);
-            // priceDelta = FullMath.mulDiv(1000000, priceDelta, _closePriceX96);
-            return (hasProfit, delta);
-        }
-    }
-
     function sqrt(uint y) internal pure returns (uint z) {
         if (y > 3) {
             z = y;
@@ -150,10 +91,6 @@ library TradeMath {
         return keccak256(abi.encodePacked(_account, _tradePool, _long0));
     }
 
-    // function printInt(string memory str, int val) internal pure {
-    //     // if (val > 0) console.log(str, "+", uint256(val));
-    //     // else console.log(str, "-", uint256(-val));
-    // }
 
     function token0to1NoSpl(
         uint256 _amount0,

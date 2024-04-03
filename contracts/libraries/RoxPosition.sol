@@ -2,7 +2,7 @@
 pragma solidity >=0.5.0 <0.8.0;
 pragma abicoder v2;
 
-import "@openzeppelin/contracts/math/SafeMath.sol";
+import "../libraries/LowGasSafeMath.sol";
 import '../libraries/LiquidityMath.sol';
 import '../libraries/SqrtPriceMath.sol';
 import '../libraries/TickMath.sol';
@@ -13,7 +13,7 @@ import "./FullMath.sol";
 import '../interfaces/IRoxPerpPool.sol';
 
 library RoxPosition {
-    using SafeMath for uint256;
+    using LowGasSafeMath for uint256;
 
     uint256 public constant ltprec = 1e12;
 
@@ -28,7 +28,6 @@ library RoxPosition {
         // the real liquidity of the position
         // supply liquidity = sum(liq / deltaPrice )
         uint128 liquidity;
-
         // how many uncollected tokens are owed to the position, as of the last computation
         // including 
         uint128 tokensOwed0;
@@ -40,7 +39,6 @@ library RoxPosition {
         uint128 spotFeeOwed0;
         uint128 spotFeeOwed1;
 
-        // uint256 priceMpSt; TODO: do not use array in struct, but save start index
         // uint256 timeMpSt;
         uint256[] priceMap;
         uint256[] timeMap;
@@ -56,7 +54,8 @@ library RoxPosition {
         int24 tickLower,
         int24 tickUpper,
         int24 curTick,
-        uint160 sqrtPriceX96
+        uint160 sqrtPriceX96,
+        bool roundUp
     )internal pure returns (uint256 amount0, uint256 amount1){
         // if (liquidityDelta < 1)
         //     return (0, 0);
@@ -67,7 +66,7 @@ library RoxPosition {
                 TickMath.getSqrtRatioAtTick(tickLower),
                 TickMath.getSqrtRatioAtTick(tickUpper),
                 liquidityDelta,
-                true
+                roundUp
             );
         } else if (curTick < tickUpper) {
             // current tick is inside the passed range
@@ -75,13 +74,13 @@ library RoxPosition {
                 sqrtPriceX96,
                 TickMath.getSqrtRatioAtTick(tickUpper),
                 liquidityDelta,
-                true
+                roundUp
             );
             amount1 = SqrtPriceMath.getAmount1Delta(
                 TickMath.getSqrtRatioAtTick(tickLower),
                 sqrtPriceX96,
                 liquidityDelta,
-                true
+                roundUp
             );
         } else {
             // current tick is above the passed range; liquidity can only become in range by crossing from right to
@@ -90,7 +89,7 @@ library RoxPosition {
                 TickMath.getSqrtRatioAtTick(tickLower),
                 TickMath.getSqrtRatioAtTick(tickUpper),
                 liquidityDelta,
-                true
+                roundUp
             );
         }
     }

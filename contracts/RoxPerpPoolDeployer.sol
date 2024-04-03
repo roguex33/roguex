@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity =0.7.6;
 
-import "./libraries/TradeMath.sol";
 import './interfaces/IRoxPerpPoolDeployer.sol';
 import './RoxPerpPool.sol';
 
@@ -37,7 +36,7 @@ contract RoxPerpPoolDeployer is IRoxPerpPoolDeployer {
         address spotPool,
         address posnPool
     ) external override returns (address pool) {
-        require(deployFactory == msg.sender, "F");
+        require(deployFactory == msg.sender);
         parameters = Parameters({factory: factory, token0: token0, token1: token1, fee: fee, spotPool:spotPool,posnPool:posnPool});
         pool = address(new RoxPerpPool{salt: keccak256(abi.encode(token0, token1, fee))}());
         delete parameters;

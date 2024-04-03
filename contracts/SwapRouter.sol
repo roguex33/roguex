@@ -18,6 +18,7 @@ import "./libraries/CallbackValidation.sol";
 import "./interfaces/external/IWETH9.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./interfaces/ISwapMining.sol";
+import "./base/BlastBase.sol";
 
 /// @title Spot Pool Swap Router
 /// @notice Router for stateless execution of swaps against spot pool
@@ -28,7 +29,8 @@ contract SwapRouter is
     PeripheryValidation,
     PeripheryPaymentsWithFee,
     Multicall,
-    SelfPermit
+    SelfPermit,
+    BlastBase
 {
     using Path for bytes;
     using SafeCast for uint256;
@@ -269,6 +271,16 @@ contract SwapRouter is
         // it's technically possible to not receive the full output amount,
         // so if no price limit has been specified, require this possibility away
         if (sqrtPriceLimitX96 == 0) require(amountOutReceived == amountOut);
+
+        callSwapMining(
+            msg.sender,
+            getPool(tokenIn, tokenOut, fee),
+            tokenIn,
+            tokenOut,
+            amountIn,
+            amountOutReceived
+        );
+
     }
 
     /// @inheritdoc ISwapRouter

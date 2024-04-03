@@ -43,7 +43,7 @@ library PoolData {
         // the tick associated with the current price
         int24 tick;
         // the global fee growth of the input token
-        uint128 feeGrowthGlobalX128;
+        uint128 feeGrowth;
         // amount of input token paid as protocol fee
         // uint128 protocolFee;
         // the current liquidity in range

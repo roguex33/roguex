@@ -48,19 +48,19 @@ interface IRoxSpotPoolActions {
         uint128 amount1Requested
     ) external returns (uint128 amount0, uint128 amount1);
 
-    /// @notice Burn liquidity from the sender and account tokens owed for the liquidity to the position
-    /// @dev Can be used to trigger a recalculation of fees owed to a position by calling with an amount of 0
-    /// @dev Fees must be collected separately via a call to #collect
-    /// @param tickLower The lower tick of the position for which to burn liquidity
-    /// @param tickUpper The upper tick of the position for which to burn liquidity
-    /// @param amount How much liquidity to burn
-    /// @return amount0 The amount of token0 sent to the recipient
-    /// @return amount1 The amount of token1 sent to the recipient
-    function burn(
-        int24 tickLower,
-        int24 tickUpper,
-        uint128 amount
-    ) external returns (uint256 amount0, uint256 amount1);
+    // /// @notice Burn liquidity from the sender and account tokens owed for the liquidity to the position
+    // /// @dev Can be used to trigger a recalculation of fees owed to a position by calling with an amount of 0
+    // /// @dev Fees must be collected separately via a call to #collect
+    // /// @param tickLower The lower tick of the position for which to burn liquidity
+    // /// @param tickUpper The upper tick of the position for which to burn liquidity
+    // /// @param amount How much liquidity to burn
+    // /// @return amount0 The amount of token0 sent to the recipient
+    // /// @return amount1 The amount of token1 sent to the recipient
+    // function burn(
+    //     int24 tickLower,
+    //     int24 tickUpper,
+    //     uint128 amount
+    // ) external returns (uint256 amount0, uint256 amount1);
 
     /// @notice Swap token0 for token1, or token1 for token0
     /// @dev The caller of this method receives a callback in the form of ISwapCallback#swapCallback
@@ -81,9 +81,9 @@ interface IRoxSpotPoolActions {
     ) external returns (int256 amount0, int256 amount1);
 
 
-    /// @notice Increase the maximum number of price and liquidity observations that this pool will store
-    /// @dev This method is no-op if the pool already has an observationCardinalityNext greater than or equal to
-    /// the input observationCardinalityNext.
-    /// @param observationCardinalityNext The desired minimum number of observations for the pool to store
-    function increaseObservationCardinalityNext(uint16 observationCardinalityNext) external;
+    // /// @notice Increase the maximum number of price and liquidity observations that this pool will store
+    // /// @dev This method is no-op if the pool already has an observationCardinalityNext greater than or equal to
+    // /// the input observationCardinalityNext.
+    // /// @param observationCardinalityNext The desired minimum number of observations for the pool to store
+    // function increaseObservationCardinalityNext(uint16 observationCardinalityNext) external;
 }

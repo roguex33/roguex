@@ -7,8 +7,8 @@ import "./interfaces/IRoxSpotPool.sol";
 import "./interfaces/IRoxSpotPoolDeployer.sol";
 import "./interfaces/IRoxPerpPoolDeployer.sol";
 import './interfaces/IRoxPosnPoolDeployer.sol';
-
 import "./NoDelegateCall.sol";
+import "./base/BlastBase.sol";
 
 // import './RoxSpotPool.sol';
 
@@ -16,15 +16,13 @@ interface IHypervisorFactory {
     function createHypervisor(
         address tokenA,
         address tokenB,
-        uint24 fee,
-        string memory name,
-        string memory symbol
+        uint24 fee
     ) external returns (address hypervisor);
 }
 
 /// @title Canonical Spot factory
 /// @notice Deploys Spot pools and manages ownership and control over pool protocol fees
-contract RoguexFactory is IRoguexFactory, NoDelegateCall {
+contract RoguexFactory is IRoguexFactory, NoDelegateCall, BlastBase {
     /// @inheritdoc IRoguexFactory
     address public override owner;
     address public override spotPoolDeployer;
@@ -57,6 +55,7 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
     mapping(address => bool) public override approvedSpotPool;
 
     mapping(address => address) public spotCreator;
+    mapping(address => address) public override spotHyper;
     mapping(address => address) private _spotOwner;
 
 
@@ -124,7 +123,8 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
     function createPool(
         address tokenA,
         address tokenB,
-        uint24 fee
+        uint24 fee,
+        address poolOwner
     )
         external
         override
@@ -181,7 +181,6 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
         getTradePool[token0][token1][fee] = _tradePool;
         getTradePool[token1][token0][fee] = _tradePool;
 
- 
         _posPool = IRoxPosnPoolDeployer(posnPoolDeployer).deploy(
             address(this),
             token0,
@@ -197,22 +196,24 @@ contract RoguexFactory is IRoguexFactory, NoDelegateCall {
 
 
         if (hypervisorFactory != address(0)) {
-            IHypervisorFactory(hypervisorFactory).createHypervisor(
+            spotHyper[_pool] = IHypervisorFactory(hypervisorFactory).createHypervisor(
                 token0,
                 token1,
-                fee,
-                "Lp",
-                "Lp"
+                fee
             );
         }
         emit PoolCreated(token0, token1, fee, 600, _pool, _tradePool);
+
+        _spotOwner[_pool] = poolOwner;
+        spotCreator[_pool] = poolOwner;
     }
 
     /// @inheritdoc IRoguexFactory
-    function setOwner(address _owner) external override {
+    function transferOwnership(address _owner) external override {
         require(msg.sender == owner);
         emit OwnerChanged(owner, _owner);
         owner = _owner;
     }
+
 
 }

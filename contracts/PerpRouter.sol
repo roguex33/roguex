@@ -16,6 +16,7 @@ import "./libraries/TradeData.sol";
 import "./libraries/TradeMath.sol";
 import "./interfaces/IRoxUtils.sol";
 import "./interfaces/ISwapMining.sol";
+import "./base/BlastBase.sol";
 
 
 library DispData {
@@ -71,7 +72,7 @@ library DispData {
     }
 }
 
-contract PerpRouter is IPerpRouter {
+contract PerpRouter is IPerpRouter, BlastBase {
     using LowGasSafeMath for uint256;
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using EnumerableValues for EnumerableSet.Bytes32Set;
@@ -86,7 +87,7 @@ contract PerpRouter is IPerpRouter {
     address immutable public weth;
 
     receive() external payable {
-        require(msg.sender == weth, "Router: invalid sender");
+        require(msg.sender == weth, "invalid sender");
     }
 
     constructor(address _factory, address _weth){
@@ -95,11 +96,12 @@ contract PerpRouter is IPerpRouter {
     }
 
     function setSwapMining(address addr) public {//TEST ONLY
-        require(msg.sender == IRoguexFactory(factory).owner(), "ol");
+        require(msg.sender == IRoguexFactory(factory).owner(), "ow");
         swapMining = addr;
     }
+
     function setUtils(address _roguUtils, address _perpOrderbook) external { //TEST ONLY
-        require(msg.sender == IRoguexFactory(factory).owner(), "ol");
+        require(msg.sender == IRoguexFactory(factory).owner(), "ow");
         roxUtils = _roguUtils;
         perpOrderbook = _perpOrderbook;
     }
@@ -112,9 +114,8 @@ contract PerpRouter is IPerpRouter {
         bool _long0,
         uint160 _sqrtPriceX96
     ) external payable{
-        require(_tokenAmount > 0, "zero amount in");
+        require(_tokenAmount > 0, "z0i");
         address _account = _sender();
-        // require(_sqrtPriceX96 <= _tPrice, "pSplitage");
 
         if (_long0){
             address _t0 = IRoxPerpPool(_perpPool).token0();
@@ -147,7 +148,7 @@ contract PerpRouter is IPerpRouter {
         bool _long0,
         uint160 _sqrtPriceX96
     ) external override {
-        require(_tokenAmount > 0, "zero amount in");
+        require(_tokenAmount > 0, "z0i");
         require (_account != address(0), "zero acc");
 
         // require(msg.sender == perpOrderbook, "onlyOB"); 
@@ -167,7 +168,7 @@ contract PerpRouter is IPerpRouter {
         uint256 _opPrice,
         bool _long0
     ) private {
-        require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "invalid RoxPerpPool");
+        require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "npp");
         (bytes32 key, uint256 incDelta, uint256 openPrice) = IRoxPerpPool(_perpPool).increasePosition(
             _account,
             _sizeDelta,
@@ -175,7 +176,7 @@ contract PerpRouter is IPerpRouter {
         );
 
         if (_opPrice > 0){
-            require(_long0 ? openPrice <= _opPrice : openPrice >= _opPrice, "pSplitage");
+            require(_long0 ? openPrice <= _opPrice : openPrice >= _opPrice, "esp");
         }
 
         if (swapMining != address(0)) {
@@ -197,7 +198,7 @@ contract PerpRouter is IPerpRouter {
         address _perpPool,
         bytes32 _key
     ) external {
-        require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "invalid RoxPerpPool");
+        require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "npp");
         (bool _del, bool _isLiq, uint256 decDelta, address _account, ) = IRoxPerpPool(_perpPool).decreasePosition(
             _key,
             0,
@@ -205,7 +206,7 @@ contract PerpRouter is IPerpRouter {
             _sender(),
             true
         );
-        require(_isLiq, "notLiq.");
+        require(_isLiq, "nlq");
         
         if (swapMining != address(0)) {
             ISwapMining(swapMining).depositSwap(
@@ -230,11 +231,11 @@ contract PerpRouter is IPerpRouter {
         bool _toETH,
         uint160 _sqrtPriceX96
     ) external override {
-        require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "invalid RoxPerpPool");
+        require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "npp");
         if (_account == address(0))
             _account = _sender();
         else
-            require(msg.sender == _account || msg.sender == perpOrderbook);
+            require(msg.sender == _account || msg.sender == perpOrderbook, "irp");
 
 
         bytes32 _key = TradeMath.getPositionKey(_account, _perpPool, _long0);
@@ -247,7 +248,7 @@ contract PerpRouter is IPerpRouter {
             _toETH
         );
         if (_sqrtPriceX96 > 0){
-            require(_long0 ? _sqrtPriceX96 <= cPrice : _sqrtPriceX96 >= cPrice, "pSplitage");
+            require(_long0 ? _sqrtPriceX96 <= cPrice : _sqrtPriceX96 >= cPrice, "esp");
         }
 
         if (swapMining != address(0)) {
@@ -266,19 +267,19 @@ contract PerpRouter is IPerpRouter {
 
 
     function execTakingProfitSet(address _perpPool, bytes32 _posKey) external {
-        require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "invalid RoxPerpPool");
+        require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "npp");
         address feeReceipt = msg.sender;
         address spotPool = IRoxPerpPool(_perpPool).spotPool();
         uint256 setlThres = IRoxUtils(roxUtils).setlThres(spotPool);
         TradeData.TradePosition memory _pos = IRoxPerpPool(_perpPool).getPositionByKey(_posKey);
         if (_pos.long0){
             (uint256 r0,  ) = IRoxSpotPool(spotPool).availableReserve(true, false);
-            require(IRoxPerpPool(_perpPool).reserve0() > r0.mul(setlThres) / (1000), "NP0");
+            require(IRoxPerpPool(_perpPool).reserve0() > r0.mul(setlThres) / (1000), "np0");
         }else{
             ( , uint256 r1) = IRoxSpotPool(spotPool).availableReserve(false, true);
-            require(IRoxPerpPool(_perpPool).reserve1() > r1.mul(setlThres) / (1000), "NP1");
+            require(IRoxPerpPool(_perpPool).reserve1() > r1.mul(setlThres) / (1000), "np1");
         }
-        require(_pos.entryPos == IRoxPerpPool(_perpPool).tPid(_pos.long0), "not in pos");
+        require(_pos.entryPos == IRoxPerpPool(_perpPool).tPid(_pos.long0), "nps");
         IRoxPerpPool(_perpPool).decreasePosition(
             _posKey,
             0,

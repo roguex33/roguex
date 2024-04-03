@@ -70,6 +70,7 @@ interface IRoguexFactory {
     function perpPoolDeployer() external view returns (address);
     function posnPoolDeployer() external view returns (address);
     function spotOwner(address) external view returns (address);
+    function spotHyper(address) external view returns (address);
 
     function utils( ) external view returns (address pool);
     function weth( ) external view returns (address);
@@ -85,6 +86,7 @@ interface IRoguexFactory {
     /// @param tokenA One of the two tokens in the desired pool
     /// @param tokenB The other of the two tokens in the desired pool
     /// @param fee The desired fee for the pool
+    /// @param poolOwner The owner of spot pool
     /// @dev tokenA and tokenB may be passed in either order: token0/token1 or token1/token0. tickSpacing is retrieved
     /// from the fee. The call will revert if the pool already exists, the fee is invalid, or the token arguments
     /// are invalid.
@@ -92,12 +94,15 @@ interface IRoguexFactory {
     function createPool(
         address tokenA,
         address tokenB,
-        uint24 fee
+        uint24 fee,
+        address poolOwner
     ) external returns (address pool, address tradePool, address posPool);
 
     /// @notice Updates the owner of the factory
     /// @dev Must be called by the current owner
     /// @param _owner The new owner of the factory
-    function setOwner(address _owner) external;
+    function transferOwnership(address _owner) external;
+
+
 
 }

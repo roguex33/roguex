@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity =0.7.6;
 
-import "./interfaces/IRoxSpotPool.sol";
+import "./base/BlastBase.sol";
 import "./NoDelegateCall.sol";
 import "./libraries/LowGasSafeMath.sol";
 import "./libraries/SafeCast.sol";
 import "./libraries/Tick.sol";
 import "./libraries/TickBitmap.sol";
-
 import "./libraries/Oracle.sol";
 import "./libraries/RoxPosition.sol";
 import "./libraries/PositionKey.sol";
-import "./libraries/FullMath.sol";
-import "./libraries/FixedPoint128.sol";
 import "./libraries/TransferHelper.sol";
 import "./libraries/TickMath.sol";
 import "./libraries/LiquidityMath.sol";
 import "./libraries/SqrtPriceMath.sol";
 import "./libraries/SwapMath.sol";
 import "./libraries/PoolData.sol";
+import "./libraries/TickRange.sol";
 
+import "./interfaces/IRoxSpotPool.sol";
 import "./interfaces/IRoxPosnPool.sol";
 import "./interfaces/IRoxSpotPoolDeployer.sol";
 import "./interfaces/IRoguexFactory.sol";
@@ -29,7 +28,7 @@ import "./interfaces/callback/ISwapCallback.sol";
 import "./interfaces/IRoxPerpPool.sol";
 import "./interfaces/IRoxUtils.sol";
 
-contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
+contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
     using LowGasSafeMath for uint256;
     using LowGasSafeMath for int256;
     using SafeCast for uint256;
@@ -48,9 +47,8 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
     uint24 public immutable override fee;
 
     int24 public constant override tickSpacing = 600;
-
     /// @inheritdoc IRoxSpotPoolImmutables
-    uint128 public immutable override maxLiquidityPerTick;
+    uint128 public constant override maxLiquidityPerTick = 115076891079113447231442207450716337;//constant for 600 tickspace
 
     struct Slot0 {
         // the current price
@@ -88,8 +86,8 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
     address public immutable override roxPosnPool;
     address public immutable roxUtils;
 
-    uint256 public override l0rec;
-    uint256 public override l1rec;
+    // uint256 public override l0rec;
+    // uint256 public override l1rec;
 
     uint256 public override tInAccum0;
     uint256 public override tInAccum1;
@@ -105,30 +103,15 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
     }
 
     modifier onlyPerpPool() {
-        require(msg.sender == roxPerpPool, "xPP");
+        require(msg.sender == roxPerpPool, "xp");
         _;
     }
-
-    modifier onlyNftManager() {
-        require(
-            IRoguexFactory(factory).approvedNftRouters(msg.sender),
-            "xMgr"
-        );
-        _;
-    }
-
 
     constructor() {
         (factory, token0, token1, fee, roxPerpPool, roxPosnPool, roxUtils) = IRoxSpotPoolDeployer(msg.sender)
             .parameters();
-        maxLiquidityPerTick = Tick.tickSpacingToMaxLiquidityPerTick(tickSpacing);
+        // maxLiquidityPerTick = Tick.tickSpacingToMaxLiquidityPerTick(tickSpacing);
     }
-
-    // function positions(
-    //     bytes32 key
-    // ) external  view override returns ( uint128 , uint256 , uint256 , uint128 , uint128 ){
-    //     return IRoxPosnPool(roxPosnPool).positionsSum(key);
-    // }
 
     /// @dev Returns the block timestamp truncated to 32 bits, i.e. mod 2**32. This method is overridden in tests.
     function _blockTimestamp() internal view virtual returns (uint32) {
@@ -137,7 +120,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
 
     /// @dev Get the pool's balance of token0
     /// @dev This function is gas optimized to avoid a redundant extcodesize check in addition to the returndatasize
-    function balance0() private view returns (uint256) {
+    function balance0() public override view returns (uint256) {
         (bool success, bytes memory data) = token0.staticcall(
             abi.encodeWithSelector(
                 IERC20Minimal.balanceOf.selector,
@@ -150,7 +133,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
 
     /// @dev Get the pool's balance of token1
     /// @dev This function is gas optimized to avoid a redundant extcodesize check in addition to the returndatasize
-    function balance1() private view returns (uint256) {
+    function balance1() public override view returns (uint256) {
         (bool success, bytes memory data) = token1.staticcall(
             abi.encodeWithSelector(
                 IERC20Minimal.balanceOf.selector,
@@ -185,27 +168,27 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
             );
     }
 
-    /// @inheritdoc IRoxSpotPoolActions
-    function increaseObservationCardinalityNext(
-        uint16 observationCardinalityNext
-    ) external override lock noDelegateCall {
-        uint16 observationCardinalityNextOld = slot0.observationCardinalityNext; // for the event
-        uint16 observationCardinalityNextNew = observations.grow(
-            observationCardinalityNextOld,
-            observationCardinalityNext
-        );
-        slot0.observationCardinalityNext = observationCardinalityNextNew;
-        if (observationCardinalityNextOld != observationCardinalityNextNew)
-            emit IncreaseObservationCardinalityNext(
-                observationCardinalityNextOld,
-                observationCardinalityNextNew
-            );
-    }
+    // /// @inheritdoc IRoxSpotPoolActions
+    // function increaseObservationCardinalityNext(
+    //     uint16 observationCardinalityNext
+    // ) external override lock noDelegateCall {
+    //     uint16 observationCardinalityNextOld = slot0.observationCardinalityNext; // for the event
+    //     uint16 observationCardinalityNextNew = observations.grow(
+    //         observationCardinalityNextOld,
+    //         observationCardinalityNext
+    //     );
+    //     slot0.observationCardinalityNext = observationCardinalityNextNew;
+    //     if (observationCardinalityNextOld != observationCardinalityNextNew)
+    //         emit IncreaseObservationCardinalityNext(
+    //             observationCardinalityNextOld,
+    //             observationCardinalityNextNew
+    //         );
+    // }
 
     /// @inheritdoc IRoxSpotPoolActions
     /// @dev not locked because it initializes unlocked
     function initialize(uint160 sqrtPriceX96) external override {
-        require(slot0.sqrtPriceX96 == 0, "AI");
+        require(slot0.sqrtPriceX96 == 0, "ai");
 
         int24 tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
 
@@ -295,13 +278,14 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
                 params.tickLower,
                 params.tickUpper,
                 _s0.tick,
-                slot0.sqrtPriceX96
+                slot0.sqrtPriceX96,
+                true
             );
         }
-        if (amount0 > 0)
-            l0rec = params.isBurn ? l0rec.sub(amount0) : l0rec.add(amount0);
-        if (amount1 > 0)
-            l1rec = params.isBurn ? l1rec.sub(amount1) : l1rec.add(amount1);
+        // if (amount0 > 0)
+        //     l0rec = params.isBurn ? l0rec.sub(amount0) : l0rec.add(amount0);
+        // if (amount1 > 0)
+        //     l1rec = params.isBurn ? l1rec.sub(amount1) : l1rec.add(amount1);
 
     }
 
@@ -320,7 +304,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
         if (liquidityDelta == 0)
             return;
         
-        require(tickLower % 600 == 0 && tickUpper % 600 == 0, "t6");
+        require(tickLower % 600 == 0 && tickUpper % 600 == 0 && tickLower < tickUpper, "t6");
 
         // if we need to update the ticks, do it
         bool flippedLower;
@@ -374,10 +358,10 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
         //     _slot0.observationCardinality,
         //     _slot0.observationCardinalityNext
         // );
-        if (tickLower <= slot0.tick && tickUpper >= slot0.tick )
+        if (tickLower <= slot0.tick && tickUpper > slot0.tick ){
             liquidity = LiquidityMath.addDelta(liquidity, liquidityDelta);
+        }
     
-
         // clear any tick data that is no longer needed
         if (ticks[tickLower].liquidityNet == 0) {
             ticks.clear(tickLower);
@@ -398,6 +382,16 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
         uint128 amount,
         bytes calldata data
     ) external override lock returns (uint256 amount0, uint256 amount1) {
+        return _mint(recipient, tickLower, tickUpper, amount, data);
+    }
+
+    function _mint(
+        address recipient,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 amount,
+        bytes memory data
+    ) private returns (uint256 amount0, uint256 amount1) {
         require(amount > 0);
         (amount0, amount1) = _modifyPosition(
             PoolData.ModifyPositionParams({
@@ -420,10 +414,10 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
         );
 
         if (amount0 > 0) {
-            require(balance0Before.add(amount0) <= balance0(), "M0");
+            require(balance0Before.add(amount0) <= balance0(), "m0");
         }
         if (amount1 > 0) {
-            require(balance1Before.add(amount1) <= balance1(), "M1");
+            require(balance1Before.add(amount1) <= balance1(), "m1");
         }
         IRoxPerpPool(roxPerpPool).updateFundingRate();
 
@@ -446,17 +440,10 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
         uint128 amount0Requested,
         uint128 amount1Requested
     ) external override lock returns (uint128 amount0, uint128 amount1) {
-        return _collect(msg.sender, recipient, tickLower, tickUpper, amount0Requested, amount1Requested);
-    }
-
-    function collectN(
-        address recipient,
-        int24 tickLower,
-        int24 tickUpper,
-        uint128 amount0Requested,
-        uint128 amount1Requested
-    ) external override lock onlyNftManager returns (uint128 amount0, uint128 amount1) {
-        return _collect(recipient, recipient, tickLower, tickUpper, amount0Requested, amount1Requested);
+        address owner = recipient;
+        if (!IRoguexFactory(factory).approvedNftRouters(msg.sender))
+            owner = msg.sender;
+        return _collect(owner, recipient, tickLower, tickUpper, amount0Requested, amount1Requested);
     }
 
     function _collect(
@@ -475,11 +462,16 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
             amount1Requested
         );
         if (amount0 > 0) {
+            uint128 b0 = uint128(balance0());
+            if (amount0 > b0) amount0 = b0;
             TransferHelper.safeTransfer(token0, recipient, amount0);
         }
         if (amount1 > 0) {
+            uint128 b1 = uint128(balance1());
+            if (amount1 > b1) amount1 = b1;
             TransferHelper.safeTransfer(token1, recipient, amount1);
         }
+        IRoxPerpPool(roxPerpPool).updateFundingRate();
         emit Collect(
             owner,
             recipient,
@@ -490,25 +482,17 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
         );
     }
 
-
-
-    /// @inheritdoc IRoxSpotPoolActions
-    /// @dev noDelegateCall is applied indirectly via _modifyPosition
-    function burn(
-        int24 tickLower,
-        int24 tickUpper,
-        uint128 amount
-    ) external override lock returns (uint256 amount0, uint256 amount1) {
-        return _burn(msg.sender, tickLower, tickUpper, amount);
-    }
-
     function burnN(
         address owner,
         int24 tickLower,
         int24 tickUpper,
         uint128 amount
-    ) external override lock onlyNftManager returns (uint256 amount0, uint256 amount1) {
-        return _burn(owner, tickLower, tickUpper, amount);
+    ) external override lock returns (uint256 amount0, uint256 amount1) {
+        if (!IRoguexFactory(factory).approvedNftRouters(msg.sender))
+            owner = msg.sender;
+        (amount0, amount1) = _burn(owner, tickLower, tickUpper, amount);
+        if (msg.sender != IRoguexFactory(factory).spotHyper(address(this)))
+            liqdCheck();
     }
 
     function _burn(
@@ -526,10 +510,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
                 liquidityDelta: amount
             })
         );
-        uint256 liqdThres = IRoxUtils(roxUtils).spotThres(address(this));
-        (uint256 r0, uint256 r1) = availableReserve(true, true);
-        require(r1 * liqdThres>= IRoxPerpPool(roxPerpPool).reserve1() * 1000, "0bn");
-        require(r0 * liqdThres>= IRoxPerpPool(roxPerpPool).reserve0() * 1000, "1bn");
+
         IRoxPerpPool(roxPerpPool).updateFundingRate();
         emit Burn(msg.sender, tickLower, tickUpper, amount, amount0, amount1);
     }
@@ -550,11 +531,10 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
             _blockTimestamp()
         );
     }
-
+    
     function perpSettle(
         uint256 amount,
         bool is0,
-        bool isBurn,
         address recipient
     )
         external
@@ -562,22 +542,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
         onlyPerpPool
     {
         if (amount < 1) return;
-
-        if (is0) {
-            if (isBurn) {
-                l0rec -= amount;
-                TransferHelper.safeTransfer(token0, recipient, amount);
-            } else {
-                l0rec += amount;
-            }
-        } else {
-            if (isBurn) {
-                l1rec -= amount;
-                TransferHelper.safeTransfer(token1, recipient, amount);
-            } else {
-                l1rec += amount;
-            }
-        }
+        TransferHelper.safeTransfer(is0 ? token0 : token1, recipient, amount);
     }
 
     /// @inheritdoc IRoxSpotPoolActions
@@ -624,7 +589,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
             amountCalculated: 0,
             sqrtPriceX96: slot0Start.sqrtPriceX96,
             tick: slot0Start.tick,
-            feeGrowthGlobalX128: 0, //zeroForOne ? feeGrowthGlobal0X128 : feeGrowthGlobal1X128,
+            feeGrowth: 0,
             liquidity: cache.liquidityStart
         });
 
@@ -634,7 +599,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
             state.sqrtPriceX96 != sqrtPriceLimitX96
         ) {
             PoolData.StepComputations memory step;
-            require(state.liquidity > 0, "IS");
+            require(state.liquidity > 0, "ISL");
 
             step.sqrtPriceStartX96 = state.sqrtPriceX96;
 
@@ -644,16 +609,15 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
                     tickSpacing,
                     zeroForOne
                 );
-
             if (zeroForOne) {// 0 to 1, price <---- 
                 if (state.tick - step.tickNext > 600) {
-                    step.tickNext = PriceRange.leftBoundaryTick(state.tick);
+                    step.tickNext = TickRange.leftBoundaryTickWithin(state.tick);
                     step.initialized = false;
                 }
 
             } else {//1 to 0, price ---->
                 if (step.tickNext - state.tick > 600) {
-                    step.tickNext = PriceRange.rightBoundaryTick(state.tick);
+                    step.tickNext = TickRange.rightBoundaryTick(state.tick);
                     step.initialized = false;
                 }
             }
@@ -700,14 +664,9 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
                     (step.amountIn + step.feeAmount).toInt256()
                 );
             }
-
+            state.feeGrowth += uint128(step.feeAmount);
             // update global fee tracker
-            if (state.liquidity > 0) {
-                // uint256 fpx = FullMath.mulDiv(
-                //     step.feeAmount,
-                //     FixedPoint128.Q128,
-                //     state.liquidity
-                // );
+            if (state.liquidity > 0 && step.feeAmount > 0) {
                 IRoxPosnPool(roxPosnPool).updateSwapFee(state.tick, zeroForOne, step.feeAmount, state.liquidity);
             }
 
@@ -731,6 +690,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
                         );
                         cache.computedLatestObservation = true;
                     }
+                    
                     int128 liquidityNet = ticks.cross(
                         step.tickNext,
                         cache.secondsPerLiquidityCumulativeX128,
@@ -756,6 +716,11 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
 
         // update tick and write an oracle entry if the tick change
         if (state.tick != slot0Start.tick) {
+            if (zeroForOne)
+                require(slot0Start.tick > state.tick, "s0");
+            else {
+                require(slot0Start.tick < state.tick, "s1");
+            }
             (
                 uint16 observationIndex,
                 uint16 observationCardinality
@@ -799,44 +764,49 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
 
 
         // do the transfers and collect payment
+        uint256 spotThres = IRoxUtils(roxUtils).spotThres(address(this));
         if (zeroForOne) {
             if (amount1 < 0) {
-                TransferHelper.safeTransfer(
-                    token1,
-                    recipient,
-                    uint256(-amount1)
-                );
                 require(amount0 > 0, "a0");
-                l1rec = l1rec.sub(uint256(-amount1));
-                l0rec = l0rec.add(uint256(amount0));
-                tInAccum0 = tInAccum0.add(uint256(amount0));
+                tInAccum0 = tInAccum0.add(uint256(amount0)).sub(uint256(state.feeGrowth));
+
+                TransferHelper.safeTransfer(
+                        token1,
+                        recipient,
+                        uint256(-amount1)
+                    );
+
+                (, uint256 r1) = availableReserve(false, true);
+                require(r1 * spotThres  >= IRoxPerpPool(roxPerpPool).reserve1() * 1000, "z0");
+                uint256 balance0Before = balance0();
+                ISwapCallback(msg.sender).swapCallback(
+                    amount0,
+                    amount1,
+                    data
+                );
+                require(balance0Before.add(uint256(amount0)) <= balance0(), "IIA");
             }
-            uint256 balance0Before = balance0();
-            ISwapCallback(msg.sender).swapCallback(
-                amount0,
-                amount1,
-                data
-            );
-            require(balance0Before.add(uint256(amount0)) <= balance0(), "IIA");
+
         } else {
             if (amount0 < 0) {
+                require(amount1 > 0, "a1");
+                tInAccum1 = tInAccum1.add(uint256(amount1));
+
                 TransferHelper.safeTransfer(
                     token0,
                     recipient,
                     uint256(-amount0)
                 );
-                require(amount1 > 0, "a1");
-                l0rec = l0rec.sub(uint256(-amount0));
-                l1rec = l1rec.add(uint256(amount1));
-                tInAccum1 = tInAccum1.add(uint256(amount1));
+                (uint256 r0, ) = availableReserve(true, false);
+                require(r0  * spotThres >= IRoxPerpPool(roxPerpPool).reserve0() * 1000, "z1");
+                uint256 balance1Before = balance1();
+                ISwapCallback(msg.sender).swapCallback(
+                    amount0,
+                    amount1,
+                    data
+                );
+                require(balance1Before.add(uint256(amount1)) <= balance1(), "IIA");
             }
-            uint256 balance1Before = balance1();
-            ISwapCallback(msg.sender).swapCallback(
-                amount0,
-                amount1,
-                data
-            );
-            require(balance1Before.add(uint256(amount1)) <= balance1(), "IIA");
         }
         require(state.liquidity > 0, "IS");
         emit Swap(
@@ -848,17 +818,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
             state.liquidity,
             state.tick
         );
-
-        // zeroForOne: -true for token0 to token1, false for token1 to token0
-        uint256 spotThres = IRoxUtils(roxUtils).spotThres(address(this));
-        if (zeroForOne) { //token 1 decrease and only valid token 1
-            (, uint256 r1) = availableReserve(false, true);
-            require(r1 * spotThres  >= IRoxPerpPool(roxPerpPool).reserve1() * 1000, "t1s");
-        }
-        else{
-            (uint256 r0, ) = availableReserve(true, false);
-            require(r0  * spotThres >= IRoxPerpPool(roxPerpPool).reserve0() * 1000, "t0s");
-        }
+        
         IRoxPerpPool(roxPerpPool).updateFundingRate();
         slot0.unlocked = true;
     }
@@ -866,27 +826,18 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall {
     function availableReserve(
         bool _l0, bool _l1
         ) public view override returns (uint256 r0, uint256 r1){
-        uint256 pr = PriceRange.tickToPr(slot0.tick);
-        if (liquidity < 1)
-            return (0,0);
-        if (_l0){
-            int256 curAmount = SqrtPriceMath.getAmount0Delta(
-                    slot0.sqrtPriceX96,
-                    TickMath.getSqrtRatioAtTick(PriceRange.prStartTick(pr + 1)),
-                    int128(liquidity)
-                );
-            uint256 c0 = uint256(curAmount >= 0 ? curAmount : -curAmount);
-            r0 = l0rec;
-            r0 = r0 > c0 ? (r0 - c0) : 0;
-        }
-        if (_l1){
-            int256 curAmount = SqrtPriceMath.getAmount1Delta(
-                    TickMath.getSqrtRatioAtTick(PriceRange.prStartTick(pr)),
-                    slot0.sqrtPriceX96,
-                    int128(liquidity));
-            uint256 c1 = uint256(curAmount >= 0 ? curAmount : -curAmount);
-            r1 = l1rec;
-            r1 = r1 > c1 ? (r1 - c1) : 0;
-        }
+            return IRoxUtils(roxUtils).availableReserve(address(this), _l0, _l1);
+    }
+
+    function liqdCheck( ) public view returns (bool){
+        uint256 liqdThres = IRoxUtils(roxUtils).spotThres(address(this));
+        (uint256 r0, uint256 r1) = availableReserve(true, true);
+        require(r1 * liqdThres>= IRoxPerpPool(roxPerpPool).reserve1() * 1000, "bn0");
+        require(r0 * liqdThres>= IRoxPerpPool(roxPerpPool).reserve0() * 1000, "bn1");
+        return true;
+    }
+    
+    function getTwapTickUnsafe(uint32 _sec) public view override returns (int24 tick) {   
+        return IRoxUtils(roxUtils).getTwapTickUnsafe(address(this), _sec);
     }
 }

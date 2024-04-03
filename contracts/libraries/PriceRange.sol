@@ -9,8 +9,6 @@ import './LiquidityMath.sol';
 import "./FullMath.sol";
 import './FixedPoint128.sol';
 
-import "hardhat/console.sol";
-
 library PriceRange {
     using LowGasSafeMath for int256;
     using SafeCast for int256;
@@ -18,7 +16,6 @@ library PriceRange {
     uint256 constant PRP_PREC =  100000000;
     uint256 constant PRP_MAXP = 4100000000;
     uint256 constant PRP_MINP =        100;
-    uint256 constant PS_SPACING = 100000;
 
 
     // Price Range:
@@ -42,7 +39,6 @@ library PriceRange {
     }
 
     function tickToPr(int24 tick) internal pure returns (uint16) {
-        // require(tick >= 0);
         tick = (tick + 887400) / 600;
         return uint16(tick);
     }
@@ -58,34 +54,14 @@ library PriceRange {
         return pr % 8 == 0;
     }
 
-
-    function prStartTick(uint256 pr) internal pure returns (int24) {
-        require(pr < 2959, "nPR"); //2958 max range.
-        int256 _tk = int256(pr * 600);
-        return int24(_tk - 887400);
-    }
-
-    // zeroForOne: true for token0 to token1, false for token1 to token0
     function rightBoundaryTick(int24 tick) internal pure returns (int24) {
         return ((tick + 887400) / 600 + 1) * 600 - 887400;
-        // return prStartTick(tickToPr(tick) + 1);
-    }
-
-    function leftBoundaryTick(int24 tick) internal pure returns (int24) {
-        // if at boundary(%600 == 0), check next left b.
-        return ((tick + 887399) / 600) * 600 - 887400;
-        // return prStartTick(tickToPr(tick - 1));
     }
 
     function leftBoundaryTickWithin(int24 tick) internal pure returns (int24) {
         // if at boundary(%600 == 0), check next left b.
         return ((tick + 887400) / 600) * 600 - 887400;
-        // return prStartTick(tickToPr(tick - 1));
     }
-
-    // function tickPoint(int24 tick) internal pure returns (int24) {
-    //     return (tick / 600) * 600 - (tick < 0 ? 600 : 0);
-    // }
 
 
     function prTime(
@@ -130,21 +106,6 @@ library PriceRange {
         }
         return ar;
     }
-
-
-    function updatePositionEntryPrice(
-        uint256 entryLiq,
-        uint256 entryPrice,
-        uint256 newLiq,
-        uint256 curPrice
-    ) internal pure returns (uint256) {
-        // entryLiqNow + newRealLiq = (positinLiq + newRealLiq) / avePrice * newPrice
-        // positinLiq / entryPrice * newPrice + newRealLiq = (positinLiq + newRealLiq) * newPrice / avePrice
-        // avePrice = (positinLiq + newRealLiq) * newPrice / (positinLiq * newPrice / entryPrice  + newRealLiq)
-        uint256 positionRealLiq = FullMath.mulDiv(entryLiq, curPrice, entryPrice);
-        return FullMath.mulDiv(entryLiq + newLiq, curPrice, positionRealLiq + newLiq);
-    }
-
 
 
     function updateU32Slot(
@@ -219,7 +180,7 @@ library PriceRange {
     ) internal pure returns (uint32) {
         if (curPrice < 1) return 0;
         if (burn)
-            require(realLiq > liqDelta, "price=0");
+            require(realLiq > liqDelta, "lInf");
 
         //  supLiq  = realLiq / curPrice
         // newPrice = (realLiq + delta) / supLiq
@@ -257,12 +218,11 @@ library PriceRange {
         uint256 price
     ) internal {
         PriceRange.FeeInfo memory info = self[prTimeIndex(pr, cacheTime)];
-        if (price > 0){
+        if (price > 1){
             feeDelta = FullMath.mulDiv(
                 feeDelta,
                 FixedPoint128.Q128,
-                liquidity * PriceRange.PRP_PREC / price);
-
+                liquidity * PriceRange.PRP_PREC / uint256(price));
             // convert real liquidity to supply liquidity
             if (zeroForOne)
                 info.spotFee0X128 += uint128(feeDelta);
@@ -284,7 +244,7 @@ library PriceRange {
     ) internal {
         PriceRange.FeeInfo memory info = self[prTimeIndex(pr, cacheTime)];
 
-        if (price > 0){
+        if (price > 1){
             feeDelta = FullMath.mulDiv(
                 feeDelta,
                 FixedPoint128.Q128,
@@ -297,15 +257,6 @@ library PriceRange {
                 info.perpFee1X128 += uint128(feeDelta);
         }
         self[prTimeIndex(pr, curTime)] = info;
-        // update co-slot
-        // update in main code to save gas.
-        // if (pr%2 > 0){
-        //     self[PriceRange.prTimeIndex(pr-1, curTime)]
-        //         = self[PriceRange.prTimeIndex(pr-1, cacheTime)];
-        // } else {
-        //     self[PriceRange.prTimeIndex(pr+1, curTime)]
-        //         = self[PriceRange.prTimeIndex(pr+1, cacheTime)];
-        // }
     }
 
 
@@ -321,7 +272,7 @@ library PriceRange {
             return 0;
             
         return uint128(FullMath.mulDiv(
-                    curFee - entryFee,
+                    curFee - entryFee ,
                     entryLiq,
                     FixedPoint128.Q128
                 ));

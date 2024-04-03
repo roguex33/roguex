@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity >=0.5.0 <0.8.0;
 
-import "@openzeppelin/contracts/math/SafeMath.sol";
+import "../libraries/LowGasSafeMath.sol";
 import "../libraries/TickMath.sol";
 import "../libraries/BitMath.sol";
 import "../libraries/SqrtPriceMath.sol";
 import "./FullMath.sol";
 
 library PosRange {
-    using SafeMath for uint256;
+    using LowGasSafeMath for uint256;
     // uint8 internal constant RESOLUTION = 96;
     // uint256 internal constant Q96 = 0x1000000000000000000000000;
     uint256 public constant PRICE_SPACING = 100; //1.0001^100 > 1%   17745 ranges > 70x 256 bit map

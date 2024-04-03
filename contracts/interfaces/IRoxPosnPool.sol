@@ -10,6 +10,8 @@ import '../libraries/RoxPosition.sol';
 
 interface IRoxPosnPool {
     function timeSlots(uint) external view returns (uint256);
+    function uncollect0() external view returns (uint256);
+    function uncollect1() external view returns (uint256);
 
     function priceSlot(
         uint256 psId
@@ -36,12 +38,7 @@ interface IRoxPosnPool {
             uint16 _psId,
             uint256 _priceSlot) external;
 
-    function writeTimeSlot(
-            uint16 _psId,
-            uint256 _timeSlot) external;
-
     function updatePerpFee(
-        uint256 cacheTime,
         uint256 curTime,
         uint16 pr,
         uint256 price,

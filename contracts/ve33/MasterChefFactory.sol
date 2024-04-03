@@ -429,6 +429,15 @@ contract MasterChef {
             totalSupply;
     }
 
+    function getRewardRateAtNow(address token) public view returns (uint256) {
+        uint256 timestamp = block.timestamp;
+        if (timestamp >= periodFinish[token]) {
+            return 0;
+        } else {
+            return rewardRate[token];
+        }
+    }
+
     function lastTimeRewardApplicable(
         address token
     ) public view returns (uint256) {
@@ -497,7 +506,8 @@ contract MasterChef {
     }
 
     function notifyRewardAmount(address token, uint256 _amount) external {
-        require(_amount > 0, "amount not zero");
+        // require(_amount > 0, "amount not zero");
+        if (_amount < 1) return;
         require(token != address(0), "zero Token");
         if (!isReward[token]) {
             require(rewardTokens.length < 4, "not reward Token");

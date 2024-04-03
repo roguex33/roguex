@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity >=0.5.0 <0.8.0;
 
-// import "@openzeppelin/contracts/math/SafeMath.sol";
 import "./FullMath.sol";
 
 library TradeData {
@@ -36,7 +35,6 @@ library TradeData {
         // uint128 liqResv;
 
         uint128 reserve;
-        uint128 reserveMax;
 
         uint128 uncollectFee;
         uint128 transferIn;
@@ -58,32 +56,11 @@ library TradeData {
         uint16 curIdx;
     }
 
-    struct SwapState {
-        int256 amountSpecifiedRemaining;
-        int256 amountCalculated;
-        uint160 sqrtPriceX96;
-        int24 tick;
-        uint128 liquidity;
-        uint256 feeGrowthGlobalX128;
-    }
 
-    struct LiqCalState {
-        uint256 amountSpecifiedRemaining;
-        uint160 sqrtPriceX96;
-        int24 tick;
-        uint128 liquidity;
-    }
-
-
-    struct StepComputations {
-        uint160 sqrtPriceStartX96;
-        int24 tickNext;
-        bool initialized;
-        uint160 sqrtPriceNextX96;
-        uint256 amountIn;
-        uint256 amountOut;
-        uint256 feeAmount;
-    }
-
-    
+    // struct LiqCalState {
+    //     uint256 amountSpecifiedRemaining;
+    //     uint160 sqrtPriceX96;
+    //     int24 tick;
+    //     uint128 liquidity;
+    // }
 }

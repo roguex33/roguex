@@ -7,10 +7,9 @@ import "./libraries/FixedPoint128.sol";
 import "./libraries/FullMath.sol";
 import "./interfaces/IRoguexFactory.sol";
 import "./interfaces/IRoxPerpPool.sol";
-
 import "./interfaces/INonfungiblePositionManager.sol";
 import "./interfaces/INonfungibleTokenPositionDescriptor.sol";
-import "./libraries/PositionKey.sol";
+// import "./libraries/PositionKey.sol";
 import "./libraries/PoolAddress.sol";
 import "./base/LiquidityManagement.sol";
 import "./base/PeripheryImmutableState.sol";
@@ -18,40 +17,27 @@ import "./base/Multicall.sol";
 import "./base/ERC721Permit.sol";
 import "./base/PeripheryValidation.sol";
 import "./base/SelfPermit.sol";
-import "./base/PoolInitializer.sol";
 import './interfaces/IRoxPosnPool.sol';
+import "./interfaces/IRoxUtils.sol";
+import "./base/BlastBase.sol";
 
 /// @title NFT positions
 /// @notice Wraps Liquidity Positions in the ERC721 non-fungible token interface
 contract NonfungiblePositionManager is
     INonfungiblePositionManager,
     Multicall,
-    ERC721Permit,
+    ERC721,
     PeripheryImmutableState,
-    PoolInitializer,
     LiquidityManagement,
     PeripheryValidation,
     SelfPermit
     {
     // details about the liquidity position
     struct Position {
-        // the address that is approved for spending this token
-        address operator;
-        
-        // the nonce for permits
-        uint96 nonce;
-        // the ID of the pool with which this token is connected
+        address owner;
         uint80 poolId;
-        // the tick range of the position
         int24 tickLower;
         int24 tickUpper;
-        // the liquidity of the position
-        // the fee growth of the aggregate position as of the last action on the individual position
-        // uint256 feeGrowthInside0LastX128;
-        // uint256 feeGrowthInside1LastX128;
-        // how many uncollected tokens are owed to the position, as of the last computation
-        // uint128 tokensOwed0;
-        // uint128 tokensOwed1;
     }
 
     /// @dev IDs of pools assigned by this contract
@@ -62,7 +48,7 @@ contract NonfungiblePositionManager is
 
     /// @dev The token ID position data
     mapping(uint256 => Position) private _positions;
-
+    mapping(bytes32 => uint256) public keyId;
     /// @dev The ID of the next token that will be minted. Skips 0
     uint176 private _nextId = 1;
     /// @dev The ID of the next pool that is used for the first time. Skips 0
@@ -71,17 +57,21 @@ contract NonfungiblePositionManager is
     /// @dev The address of the token descriptor contract, which handles generating token URIs for position tokens
     address private immutable _tokenDescriptor;
 
+    address public immutable roxUtils;
+
+
     constructor(
         address _factory,
         address _WETH9,
-        address _tokenDescriptor_
+        address _tokenDescriptor_,
+        address _roxUtils
     )
-        ERC721Permit("RogueX Positions NFT", "RgPOS", "1")
+        ERC721("RogueX Positions NFT", "RgPOS")
         PeripheryImmutableState(_factory, _WETH9)
     {
         _tokenDescriptor = _tokenDescriptor_;
+        roxUtils = _roxUtils;
     }
-
 
     /// @inheritdoc INonfungiblePositionManager
     function positions(uint256 tokenId)
@@ -96,8 +86,7 @@ contract NonfungiblePositionManager is
         {
             Position memory position = _positions[tokenId];
             require(position.poolId != 0, "Invalid token ID");
-            _dPos.nonce = position.nonce;
-            _dPos.operator = position.operator;
+            _dPos.operator = position.owner;
             _dPos.tickLower = position.tickLower;
             _dPos.tickUpper = position.tickUpper;
             PoolAddress.PoolKey memory poolKey = _poolIdToPoolKey[position.poolId];
@@ -162,8 +151,19 @@ contract NonfungiblePositionManager is
             uint256 amount1
         )
     {
-        address account = msg.sender;
+        return _mintLiq(params);
+    }
 
+    function _mintLiq(
+        MintParams calldata params
+    ) private returns (
+            uint256 tokenId,
+            uint128 liquidity,
+            uint256 amount0,
+            uint256 amount1
+        )
+    {
+        address account = msg.sender;
         MintCache memory mCache;
         IRoxSpotPool pool;
         (liquidity, amount0, amount1, pool) = addLiquidity(
@@ -181,7 +181,16 @@ contract NonfungiblePositionManager is
             })
         );
 
-        _mint(params.recipient, (tokenId = _nextId++));
+        bytes32 _nftkey = nftcompute(
+                account,
+                params.tickLower,
+                params.tickUpper,
+                address(pool)
+            );
+        require(keyId[_nftkey] < 1, "already minted.");
+
+        _mint(account, (tokenId = _nextId++));
+        keyId[_nftkey] = tokenId;
         // idempotent set
         mCache.poolId = cachePoolKey(
             address(pool),
@@ -193,14 +202,58 @@ contract NonfungiblePositionManager is
         );
 
         _positions[tokenId] = Position({
-            operator: address(0),
-            nonce: 0,
+            owner: account,
             poolId: mCache.poolId,
             tickLower: params.tickLower,
             tickUpper: params.tickUpper
         });
 
         emit IncreaseLiquidity(tokenId, liquidity, amount0, amount1);
+    }
+
+
+
+    function createAndInitializePoolAndAddLiq(
+        uint160 sqrtPriceX96,
+        MintParams calldata params,
+        uint8 _maxLeverage,
+        uint16 _spotThres,
+        uint16 _perpThres,
+        uint16 _setlThres,
+        uint32 _fdFeePerS,
+        uint32 _twapTime,
+        uint8 _countFrame
+    ) external payable returns (address pool) {
+        require(params.token0 < params.token1);
+        pool = IRoguexFactory(factory).getPool(params.token0, params.token1, params.fee);
+
+        if (pool == address(0)) {
+            (pool, , ) = IRoguexFactory(factory).createPool(
+                params.token0,
+                params.token1,
+                params.fee,
+                msg.sender
+            );
+            IRoxSpotPool(pool).initialize(sqrtPriceX96);
+        } else {
+            (uint160 sqrtPriceX96Existing, , , , , , ) = IRoxSpotPool(pool)
+                .slot0();
+            if (sqrtPriceX96Existing == 0) {
+                IRoxSpotPool(pool).initialize(sqrtPriceX96);
+            }
+        }
+        _mintLiq(params);
+
+        IRoxUtils(roxUtils).modifyPoolSetting(pool, 
+            _maxLeverage,
+            _spotThres,
+            _perpThres,
+            _setlThres,
+            _fdFeePerS,
+            _twapTime,
+            _countFrame,
+            false
+            );
     }
 
     modifier isAuthorizedForToken(uint256 tokenId) {
@@ -225,8 +278,6 @@ contract NonfungiblePositionManager is
             );
     }
 
-    // save bytecode by removing implementation of unused method
-    function baseURI() public pure override returns (string memory) {}
 
     /// @inheritdoc INonfungiblePositionManager
     function increaseLiquidity(
@@ -235,6 +286,7 @@ contract NonfungiblePositionManager is
         external
         payable
         override
+        isAuthorizedForToken(params.tokenId)
         checkDeadline(params.deadline)
         returns (uint128 liquidity, uint256 amount0, uint256 amount1)
     {
@@ -293,7 +345,7 @@ contract NonfungiblePositionManager is
 
         require(
             amount0 >= params.amount0Min && amount1 >= params.amount1Min,
-            "Price slippage check"
+            "Token received check"
         );
     
         //sWrite
@@ -339,7 +391,7 @@ contract NonfungiblePositionManager is
 
         pool.burnN(msg.sender, position.tickLower, position.tickUpper, 0);
         // the actual amounts collected are returned
-        (amount0, amount1) = pool.collectN(
+        (amount0, amount1) = pool.collect(
             msg.sender,
             position.tickLower,
             position.tickUpper,
@@ -366,45 +418,66 @@ contract NonfungiblePositionManager is
                 poolKey.fee
             )
         );
-        bytes32 _key = PositionKey.compute(
-                        ownerOf(tokenId),
-                        position.tickLower,
-                        position.tickUpper
-                    );
 
-        (uint128 liquidity,
-            uint128 spotFeeOwed0,
-            uint128 spotFeeOwed1,
-            uint128 perpFeeOwed0,
-            uint128 perpFeeOwed1,
-            uint128 tokensOwed0,
-            uint128 tokensOwed1) = IRoxPosnPool(pool.roxPosnPool()).positions(_key);
+        {
+            bytes32 _key = PositionKey.compute(
+                ownerOf(tokenId),
+                position.tickLower,
+                position.tickUpper
+            );
+            (uint128 liquidity,
+                uint128 spotFeeOwed0,
+                uint128 spotFeeOwed1,
+                uint128 perpFeeOwed0,
+                uint128 perpFeeOwed1,
+                uint128 tokensOwed0,
+                uint128 tokensOwed1) = IRoxPosnPool(pool.roxPosnPool()).positions(_key);
 
-        require(
-            liquidity + spotFeeOwed0 + spotFeeOwed1 + perpFeeOwed0 == 0 &&
-            perpFeeOwed1 + tokensOwed0 + tokensOwed1 == 0,
-            "Not cleared"
-        );
+            require(
+                liquidity + spotFeeOwed0 + spotFeeOwed1 + perpFeeOwed0 == 0 &&
+                perpFeeOwed1 + tokensOwed0 + tokensOwed1 == 0,
+                "Not cleared"
+            );
+        }
+
+        keyId[nftcompute(
+                ownerOf(tokenId),
+                position.tickLower,
+                position.tickUpper,
+                address(pool)
+            )] = 0;
         delete _positions[tokenId];
         _burn(tokenId);
     }
 
-    function _getAndIncrementNonce(
-        uint256 tokenId
-    ) internal override returns (uint256) {
-        return uint256(_positions[tokenId].nonce++);
+
+
+
+    function nftcompute(
+        address owner,
+        int24 tickLower,
+        int24 tickUpper,
+        address spotPool
+    ) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(owner, tickLower, tickUpper, spotPool));
     }
 
-    // /// @inheritdoc IERC721
-    // function getApproved(uint256 tokenId) public view override(ERC721, IERC721) returns (address) {
-    //     require(_exists(tokenId), 'ERC721: approved query for nonexistent token');
+    function transferFrom(address, address, uint256) public pure override(ERC721, IERC721) {
+        revert("ns");
+    }
+    function safeTransferFrom(address, address, uint256) public pure override(ERC721, IERC721) {
+        revert("ns");
+    }
+    function safeTransferFrom(address, address, uint256, bytes memory) public pure override(ERC721, IERC721) {
+        revert("ns");
+    }
+    function approve(address, uint256) public pure override(ERC721, IERC721) {
+        revert("ns");
+    }
+    function setApprovalForAll(address, bool) public pure override(ERC721, IERC721) {
+        revert("ns");
+    }
+    // save bytecode by removing implementation of unused method
+    function baseURI() public pure override returns (string memory) {}
 
-    //     return _positions[tokenId].operator;
-    // }
-
-    /// @dev Overrides _approve to use the operator in the position, which is packed with the position permit nonce
-    // function _approve(address to, uint256 tokenId) internal override(ERC721) {
-    //     _positions[tokenId].operator = to;
-    //     emit Approval(ownerOf(tokenId), to, tokenId);
-    // }
 }

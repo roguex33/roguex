@@ -20,6 +20,7 @@ import './libraries/PriceRange.sol';
 import './libraries/PosRange.sol';
 import "./libraries/LowGasSafeMath.sol";
 
+
 contract RoxPerpPool is IRoxPerpPool {
     using LowGasSafeMath for uint256;
     using LowGasSafeMath for uint128;
@@ -27,11 +28,13 @@ contract RoxPerpPool is IRoxPerpPool {
 
 
     event IncreasePosition(bytes32 key, address perpPool, address spotPool, uint256 sizeDelta, TradeData.TradePosition pos);
-    event DecreasePosition(bytes32 key, address perpPool, address spotPool, uint256 sizeDelta, TradeData.TradePosition pos, bool isDel, uint160 closePrice);
+    event DecreasePosition(bytes32 key, address perpPool, address spotPool, uint256 sizeDelta, TradeData.TradePosition pos, DecreaseCache decCache);
     event CollectFee(uint256 fungdingFee, uint256 positionFee, uint256 feeDistribution, bool isToken0);
     event Liquidation(bytes32 key, bool hasProfit, uint256 profitDelta, uint256 fee, address receipt, uint128 liqReward);
     event Settle(bool burn, uint256 delta, uint256 fee);
     event TickPriceUpdate(uint16 pr, uint256 price);
+    event CacDelta(bool hasProfit, uint256 deltaCac, uint256 profitDelta);
+    event Error(uint8);
 
     address public immutable factory;
     address public immutable weth;
@@ -41,7 +44,7 @@ contract RoxPerpPool is IRoxPerpPool {
     address public immutable override token1;
     IRoxUtils public immutable roxUtils;
 
-    TradeData.RoguFeeSlot rgFs;
+    TradeData.RoguFeeSlot private rgFs;
 
     uint256 public override sBalance0;
     uint256 public override sBalance1;
@@ -57,6 +60,10 @@ contract RoxPerpPool is IRoxPerpPool {
     // method split position into ranges
     mapping(uint128 => uint256) public posResv0;
     mapping(uint128 => uint256) public posResv1;
+    
+    receive() external payable {
+        require(msg.sender == weth);
+    }
 
     constructor() {
         address _factory;
@@ -78,11 +85,10 @@ contract RoxPerpPool is IRoxPerpPool {
     }
 
 
-    function rgFeeSlot(
-    ) external override view returns (TradeData.RoguFeeSlot memory){
-        return rgFs;
+    function _validOpe(address _owner) private view {
+        require(msg.sender == _owner
+                || IRoguexFactory(factory).approvedPerpRouters(msg.sender),"s");
     }
-
 
     struct IncreaseCache{
         uint160 openPrice;
@@ -91,7 +97,6 @@ contract RoxPerpPool is IRoxPerpPool {
         uint16 posId;
         uint24 spread;
         uint160 twapPrice;
-
     }
 
 
@@ -100,7 +105,7 @@ contract RoxPerpPool is IRoxPerpPool {
         uint256 _sizeDelta,
         bool _long0
         ) external override returns (bytes32, uint256, uint256) {
-        _validSender(_account);
+        _validOpe(_account);
 
         bytes32 key = TradeMath.getPositionKey(_account, address(this), _long0);
         //> token0:p  token1:1/p
@@ -146,6 +151,13 @@ contract RoxPerpPool is IRoxPerpPool {
         }
         //Update price & time & entry liquidity
         {
+            TradeData.RoguFeeSlot memory _rgfs = rgFs;
+            // (uint64 acum0, uint64 acum1) = updateFundingRate();
+            uint64 curAcum = 
+                        _long0 ?
+                        _rgfs.fundFeeAccum0 + uint64(uint256(iCache.curTime - _rgfs.time) * (uint256(_rgfs.fundFee0)))
+                        :
+                        _rgfs.fundFeeAccum1 + uint64(uint256(iCache.curTime - _rgfs.time) * (uint256(_rgfs.fundFee1)));
             // init if need
             if (position.size == 0) {
                 position.account = _account;
@@ -156,27 +168,18 @@ contract RoxPerpPool is IRoxPerpPool {
                 position.entryPos = PosRange.tickToPos(iCache.openTick);
                 position.openSpread = iCache.spread;
                 position.openTime = uint32(iCache.curTime);
+                position.entryFdAccum = curAcum; 
                 // _long0 ? l0pos.add(key) : l1pos.add(key);
             }
             else if (position.size > 0 && _sizeDelta > 0){
-                
                 // Update funding fee rate after reserve amount changed.
-                {
-                    TradeData.RoguFeeSlot memory _rgfs = rgFs;
-                    // (uint64 acum0, uint64 acum1) = updateFundingRate();
-                    uint64 curAcum = 
-                                position.long0 ?
-                                _rgfs.fundFeeAccum0 + uint64(uint256(iCache.curTime - _rgfs.time) * (uint256(_rgfs.fundFee0)))
-                                :
-                                _rgfs.fundFeeAccum1 + uint64(uint256(iCache.curTime - _rgfs.time) * (uint256(_rgfs.fundFee1)));
-                    if (position.entryFdAccum > 0){
-                        uint256 _ufee = FullMath.mulDiv(position.size, uint256(curAcum - position.entryFdAccum), 1e9);
-                        require(position.collateral > _ufee, "uf");
-                        position.collateral -= _ufee;
-                        position.uncollectFee = position.uncollectFee.addu128(uint128(_ufee));
-                    }
-                    position.entryFdAccum = curAcum; 
+                if (position.entryFdAccum > 0 && curAcum > position.entryFdAccum){
+                    uint256 _ufee = FullMath.mulDiv(position.size, uint256(curAcum - position.entryFdAccum), 1e10);
+                    require(position.collateral > _ufee, "uf");
+                    position.collateral -= _ufee;
+                    position.uncollectFee = position.uncollectFee.addu128(uint128(_ufee));
                 }
+                position.entryFdAccum = curAcum; 
                 
                 position.entrySqrtPriceX96 = uint160(TradeMath.nextPrice(
                                 position.size,
@@ -238,7 +241,6 @@ contract RoxPerpPool is IRoxPerpPool {
                     :
                     TradeMath.token0to1NoSpl(position.size + _sizeDelta, position.entrySqrtPriceX96));
             _increaseReserve(position.reserve, _long0);
-            position.reserveMax = position.reserveMax > position.reserve ? position.reserveMax : position.reserve;
             if (position.long0){
                 posResv0.posResvDelta(position.entryPos, position.reserve, true);
             }else{
@@ -264,20 +266,16 @@ contract RoxPerpPool is IRoxPerpPool {
         bool hasProfit;
         uint160 closePrice;
         uint160 twapPrice;
-        uint256 payBack;
-        uint256 payBackSettle;
-        uint256 fee;
-        uint256 feeDist;
-        uint256 profitDelta;
-        uint256 posFee;
+        uint128 payBack;
+        uint128 payBackSettle;
+        uint128 fee;
+        uint128 feeDist;
+        uint128 profitDelta;
+        uint128 posFee;
         uint128 resvDelta;
         uint128 rtnDelta;
     }
 
-    function _validSender(address _owner) private view{
-        require(msg.sender == _owner
-                || IRoguexFactory(factory).approvedPerpRouters(msg.sender),"sd");
-    }
 
     function decreasePosition(
         bytes32 _key,
@@ -288,7 +286,7 @@ contract RoxPerpPool is IRoxPerpPool {
     ) external override returns (bool, bool, uint256, address, uint256) {
         TradeData.TradePosition memory position = perpPositions[_key];
         DecreaseCache memory dCache;
-        _validSender(position.account);
+        _validOpe(position.account);
 
         if (_sizeDelta + _collateralDelta < 1)
             _sizeDelta = position.size;
@@ -322,13 +320,14 @@ contract RoxPerpPool is IRoxPerpPool {
             dCache.posFee = 
                 position.long0 
                 ?
-                uint256(rgFs.fundFeeAccum0) + (block.timestamp - rgFs.time) * (uint256(rgFs.fundFee0))
+                uint128(rgFs.fundFeeAccum0) + uint128(block.timestamp - rgFs.time) * (uint128(rgFs.fundFee0))
                 :
-                uint256(rgFs.fundFeeAccum1) + (block.timestamp - rgFs.time) * (uint256(rgFs.fundFee1));
-
+                uint128(rgFs.fundFeeAccum1) + uint128(block.timestamp - rgFs.time) * (uint128(rgFs.fundFee1));
             // collect funding fee
-            dCache.fee = FullMath.mulDiv(position.size, dCache.posFee - uint256(position.entryFdAccum), 1e9);
-
+            dCache.fee = dCache.posFee > position.entryFdAccum ?
+                    uint128(FullMath.mulDiv(position.size, dCache.posFee - position.entryFdAccum, 1e10))
+                    :
+                    0;
             position.entryFdAccum = uint64(dCache.posFee);
            
             dCache.fee += position.uncollectFee;
@@ -337,13 +336,17 @@ contract RoxPerpPool is IRoxPerpPool {
             dCache.posFee = roxUtils.collectPosFee(position.size, spotPool);
         }
 
-        // Calculate PNL
-        (dCache.hasProfit, dCache.profitDelta) = TradeMath.getDelta(
-            position.long0,
-            uint256(position.entrySqrtPriceX96),
-            dCache.closePrice,
-            position.size
-        );        
+        {
+            uint256 _deltaCac;
+            // Calculate PNL
+            (dCache.hasProfit, dCache.profitDelta, _deltaCac) = roxUtils.getDelta(
+                spotPool,
+                dCache.closePrice,
+                position
+            );   
+            emit CacDelta(dCache.hasProfit, _deltaCac, dCache.profitDelta);
+        }
+     
 
         // Position validation
         {
@@ -353,31 +356,32 @@ contract RoxPerpPool is IRoxPerpPool {
                 dCache.isLiq = true;
             }
             else if (fullDec + _collateralDelta > position.collateral){
-                revert("dC");
+                revert("fcp");
             }
         }
 
         dCache.payBack = 0;//zero back to account
         if (dCache.isLiq){
             dCache.del = true;
+
+            uint128 liqReward = uint128(position.long0 ?
+                TradeMath.token1to0NoSpl(position.collateral/20, dCache.twapPrice)
+                : 
+                TradeMath.token0to1NoSpl(position.collateral/20, dCache.twapPrice));
+            liqReward = liqReward > position.transferIn ?  position.transferIn : liqReward;
+            _transferOut(position.long0, liqReward, _feeRecipient, true);
+            position.transferIn = position.transferIn.subu128(liqReward);
+            emit Liquidation(_key, dCache.hasProfit, dCache.profitDelta, dCache.fee, _feeRecipient, liqReward);
+
             position.collateral = 0;
             _sizeDelta = position.size;
             _collateralDelta = 0;
             dCache.fee += dCache.posFee;
-
-            uint128 liqReward = uint128(position.long0 ?
-                            TradeMath.token1to0NoSpl(position.collateral/20, dCache.twapPrice)
-                            : 
-                            TradeMath.token0to1NoSpl(position.collateral/20, dCache.twapPrice));
-            liqReward = liqReward > position.transferIn ?  position.transferIn : liqReward;
-            position.long0 ? _transferOut0(liqReward, _feeRecipient, true) : _transferOut1(liqReward, _feeRecipient, true);
-            position.transferIn = position.transferIn.subu128(liqReward);
-        
-            emit Liquidation(_key, dCache.hasProfit, dCache.profitDelta, dCache.fee, _feeRecipient, liqReward);
+            // position.long0 ? _transferOut0(liqReward, _feeRecipient, true) : _transferOut1(liqReward, _feeRecipient, true);
         }else{
             if (_sizeDelta < position.size){
-                dCache.profitDelta = FullMath.mulDiv(_sizeDelta, dCache.profitDelta, position.size);
-                dCache.posFee = FullMath.mulDiv(_sizeDelta, dCache.posFee, position.size);
+                dCache.profitDelta = uint128(FullMath.mulDiv(_sizeDelta, dCache.profitDelta, position.size));
+                dCache.posFee = uint128(FullMath.mulDiv(_sizeDelta, dCache.posFee, position.size));
             }
             dCache.fee += dCache.posFee;
 
@@ -402,9 +406,9 @@ contract RoxPerpPool is IRoxPerpPool {
                 _collateralDelta = position.collateral;
             }
             if (_collateralDelta > 0){
-                require(position.collateral >=_collateralDelta, "<c" );
+                require(position.collateral >=_collateralDelta, "cmd" );
                 position.collateral = position.collateral - _collateralDelta;
-                dCache.payBack += _collateralDelta;
+                dCache.payBack += uint128(_collateralDelta);
             }
         }
 
@@ -427,10 +431,10 @@ contract RoxPerpPool is IRoxPerpPool {
         // settle fee
         {
             // trans. to sameside token
-            dCache.feeDist = position.long0 ? 
+            dCache.feeDist = uint128(position.long0 ? 
                 TradeMath.token1to0NoSpl(dCache.fee, dCache.twapPrice)
                 : 
-                TradeMath.token0to1NoSpl(dCache.fee, dCache.twapPrice);
+                TradeMath.token0to1NoSpl(dCache.fee, dCache.twapPrice));
             emit CollectFee(dCache.fee, dCache.fee - dCache.posFee, dCache.feeDist, position.long0);
             if (dCache.feeDist > position.transferIn){
                 dCache.feeDist = position.transferIn;
@@ -442,34 +446,37 @@ contract RoxPerpPool is IRoxPerpPool {
         {
             uint256 withdrawFromPool = 0;
             if (dCache.payBack > 0) {
-                dCache.payBack = position.long0
+                dCache.payBack = uint128(position.long0
                     ? TradeMath.token1to0NoSpl(dCache.payBack, dCache.twapPrice)
-                    : TradeMath.token0to1NoSpl(dCache.payBack, dCache.twapPrice);
+                    : TradeMath.token0to1NoSpl(dCache.payBack, dCache.twapPrice));
 
                 if (dCache.payBackSettle > 0){
-                    dCache.payBackSettle = position.long0
+                    dCache.payBackSettle = uint128(position.long0
                         ? TradeMath.token1to0NoSpl(dCache.payBackSettle, dCache.twapPrice)
-                        : TradeMath.token0to1NoSpl(dCache.payBackSettle, dCache.twapPrice);
+                        : TradeMath.token0to1NoSpl(dCache.payBackSettle, dCache.twapPrice) );
                     dCache.payBackSettle = position.transferIn > dCache.payBackSettle ?
                             dCache.payBackSettle
                             :
                             position.transferIn;
 
                     position.transferIn = position.transferIn.subu128(uint128(dCache.payBackSettle));
-                    position.long0 ? _transferOut0(dCache.payBackSettle, _feeRecipient, true) : _transferOut1(dCache.payBackSettle, _feeRecipient, true);
+                    // position.long0 ? _transferOut0(dCache.payBackSettle, _feeRecipient, true) : _transferOut1(dCache.payBackSettle, _feeRecipient, true);
+                    _transferOut(position.long0, dCache.payBackSettle, _feeRecipient, true);
                     dCache.payBackSettle = 0;
                 }
 
 
                 if (dCache.payBack <= position.transferIn){
                     position.transferIn = position.transferIn.subu128(uint128(dCache.payBack));
-                    position.long0 ? _transferOut0(dCache.payBack, position.account, _toETH) : _transferOut1(dCache.payBack, position.account, _toETH);
+                    // position.long0 ? _transferOut0(dCache.payBack, position.account, _toETH) : _transferOut1(dCache.payBack, position.account, _toETH);
+                    _transferOut(position.long0, dCache.payBack, position.account, _toETH);
                     dCache.payBack = 0;
                 }
                 else {
                     if (position.transferIn > 0){
                         dCache.payBack = dCache.payBack - position.transferIn;
-                        position.long0 ? _transferOut0(position.transferIn, position.account, _toETH) : _transferOut1(position.transferIn, position.account, _toETH);
+                        // position.long0 ? _transferOut0(position.transferIn, position.account, _toETH) : _transferOut1(position.transferIn, position.account, _toETH);
+                        _transferOut(position.long0, position.transferIn, position.account, _toETH);
                         position.transferIn = 0;
                     }
                     withdrawFromPool = dCache.payBack;
@@ -503,7 +510,7 @@ contract RoxPerpPool is IRoxPerpPool {
         }else{
             perpPositions[_key] = position;
         }
-        emit DecreasePosition(_key, address(this), spotPool, _sizeDelta, position, dCache.del, dCache.closePrice);
+        emit DecreasePosition(_key, address(this), spotPool, _sizeDelta, position, dCache);
 
         return (dCache.del, dCache.isLiq, dCache.rtnDelta, _acc, dCache.closePrice);
     }
@@ -527,14 +534,16 @@ contract RoxPerpPool is IRoxPerpPool {
     }
 
     function _decreaseReserve(uint256 _delta, bool _token0) private {
+        if (_delta < 1)
+            return;
         uint32 t = uint32(block.timestamp / 60);
         if (_token0) {
-            require(reserve0 >= _delta, "-0");
+            require(reserve0 >= _delta);
             reserve0 -= _delta;
             closeMinuteMap0[t] += int256(_delta);
 
         } else {
-            require(reserve1 >= _delta, "-1");
+            require(reserve1 >= _delta);
             reserve1 -= _delta;
             closeMinuteMap1[t] += int256(_delta);
         }
@@ -551,49 +560,41 @@ contract RoxPerpPool is IRoxPerpPool {
         delete perpPositions[_key];
     }
 
-
     function _transferIn(bool _isToken0) private returns (uint128) {
         if (_isToken0){
             uint256 prevBalance = sBalance0;
-            sBalance0 = balance0();
+            sBalance0 = balance(_isToken0);
             require(sBalance0 > prevBalance, "b0");
             return uint128(sBalance0 - prevBalance);
             // return sBalance0.sub(prevBalance, "sb0");
         }else{
             uint256 prevBalance = sBalance1;
-            sBalance1 = balance1();
-            require(sBalance1 > prevBalance, "b0");
+            sBalance1 = balance(_isToken0);
+            require(sBalance1 > prevBalance, "b1");
             return uint128(sBalance1 - prevBalance);  
             // return sBalance1.sub(prevBalance, "sb1");
         }
     }
 
-    function _transferOut0(uint256 _amount0, address _recipient, bool _toETH) private {
-        if (_amount0 > 0){
-            if (_toETH && token0 == weth){
-                IWETH9(weth).withdraw(_amount0);
-                TransferHelper.safeTransferETH(_recipient, _amount0);
-            }else{
-                TransferHelper.safeTransfer(token0, _recipient, _amount0);
-            }
-            sBalance0 = balance0();
+    function _transferOut(bool is0, uint256 _amount, address _recipient, bool _toETH) private {
+        if (_amount < 1)
+            return;
+        address _token = is0 ? token0 : token1; 
+        if (_toETH && _token == weth){
+            IWETH9(weth).withdraw(_amount);
+            TransferHelper.safeTransferETH(_recipient, _amount);
+        }else{
+            TransferHelper.safeTransfer(_token, _recipient, _amount);
         }
+        if (is0)
+            sBalance0 = balance(is0);
+        else
+            sBalance1 = balance(is0);
     }
 
-    function _transferOut1(uint256 _amount1, address _recipient, bool _toETH) private {
-        if (_amount1 > 0){
-            if (_toETH && token1 == weth){
-                IWETH9(weth).withdraw(_amount1);
-                TransferHelper.safeTransferETH(_recipient, _amount1);
-            }else{
-                TransferHelper.safeTransfer(token1, _recipient, _amount1);
-            }
-            sBalance1 = balance1();
-        }
-    }
-
-    function balance0() private view returns (uint256) {
-        (bool success, bytes memory data) = token0.staticcall(
+    function balance(bool is0) private view returns (uint256) {
+        address _token = is0 ? token0 : token1;
+        (bool success, bytes memory data) = _token.staticcall(
             abi.encodeWithSelector(
                 IERC20Minimal.balanceOf.selector,
                 address(this)
@@ -602,24 +603,6 @@ contract RoxPerpPool is IRoxPerpPool {
         require(success && data.length >= 32);
         return abi.decode(data, (uint256));
     }
-
-    function balance1() private view returns (uint256) {
-        (bool success, bytes memory data) = token1.staticcall(
-            abi.encodeWithSelector(
-                IERC20Minimal.balanceOf.selector,
-                address(this)
-            )
-        );
-        require(success && data.length >= 32);
-        return abi.decode(data, (uint256));
-    }
-
-    function getPositionByKey(
-        bytes32 _key
-    ) public override view returns (TradeData.TradePosition memory) {
-        return perpPositions[_key];
-    }
-
 
     struct SettleCache{
         int24 tmpSht;
@@ -634,7 +617,7 @@ contract RoxPerpPool is IRoxPerpPool {
         uint32 curTime;
         //---slot----
         
-        uint128 feeDt;
+        uint128 tkUnc;
         uint128 feeCache;
         //---slot----
 
@@ -643,11 +626,8 @@ contract RoxPerpPool is IRoxPerpPool {
 
         uint256 liqSum;
         uint256 curPriceSlot;
-        uint256 curPrTimeSlot;
         uint256 resvCache;
     }
-
-
 
     function settle(
         address _recipient,
@@ -658,31 +638,36 @@ contract RoxPerpPool is IRoxPerpPool {
     ) internal {
         SettleCache memory bCache;
         ( , bCache.tickCur , , , , , ) = IRoxSpotPool(spotPool).slot0();
-        bCache.startTickRound = PriceRange.rightBoundaryTick(bCache.tickCur) - (_is0 ? 0 : 600);
+        // bCache.startTickRound = PriceRange.rightBoundaryTick(bCache.tickCur) - (_is0 ? 0 : 600);
 
         bCache.resvCache = _is0 ? reserve0 : reserve1;
-        require(bCache.resvCache > 0 , "nRv");
-        if (_burn)
-            require(_tokenAmount <= bCache.resvCache, "lRv");
+        require(bCache.resvCache > 0 , "n");
+
         uint256[] memory liqL;
-        (liqL, bCache.endLiq, bCache.liqSum) = roxUtils.getLiquidityArraySpecifiedStart(
+        (liqL, bCache.endLiq, bCache.liqSum, bCache.startTickRound) = roxUtils.getLiqArray(
                     spotPool,
-                    bCache.tickCur,
-                    bCache.startTickRound,
                     _is0,
                     bCache.resvCache
                 );
-        require(liqL.length > 0, "c");
-        if (!_is0){
-            bCache.startTickRound -= int24(liqL.length * 300);
+        if (   liqL.length < 1 
+            || bCache.liqSum < 1
+            || (_burn && _tokenAmount > bCache.resvCache)
+            ){
+            emit Error(1);
+            return ;
         }
 
+        // if (!_is0){
+        //     bCache.startTickRound -= int24(liqL.length * 300);
+        // }
         (bCache.startPr, bCache.startPs) = PriceRange.tickTo(bCache.startTickRound);
 
-        bCache.curTime = uint32(block.timestamp);//uint256(block.timestamp).mul(PS_SPACING);
+        bCache.curTime = uint32(block.timestamp);
 
         for(uint i = 0; i < liqL.length; i+=2){
             (bCache.prId, bCache.psId) = PriceRange.tickTo(bCache.startTickRound + bCache.tmpSht);
+            // roxUtils.logInt(167, bCache.startTickRound + bCache.tmpSht);
+
             if ( (_is0 && i+2 == liqL.length) || (!_is0 && i == 0)){
                 bCache.liqDelta = uint128(FullMath.mulDiv(bCache.endLiq, _tokenAmount, bCache.resvCache));
                 bCache.feeCache = uint128(FullMath.mulDiv(_feeAmount, bCache.endLiq, bCache.liqSum));
@@ -694,47 +679,42 @@ contract RoxPerpPool is IRoxPerpPool {
 
             if (bCache.curPriceSlot < 1){ 
                 bCache.curPriceSlot = IRoxPosnPool(posnPool).priceSlot(bCache.psId);
-                bCache.curPrTimeSlot = IRoxPosnPool(posnPool).timeSlot(bCache.psId);
-                bCache.prCacheTime = PriceRange.prTime(bCache.curPrTimeSlot, bCache.prId);
             }
 
-            //TODO:  combine update perpPositions with same liquidity to save gas
 
             // Update P.R in current P.S
             // uint32 priceL = bCache.psTime > 0 ? TradeMath.priceInPs(priceSlot[bCache.psTime + bCache.psId], bCache.psId) : 1e4;
             uint256 priceL = PriceRange.priceInPs(bCache.curPriceSlot, bCache.prId);
 
             // stop pnl update when price is too high or too low .
-            if ( (priceL >= PriceRange.PRP_MAXP && !_burn)
-                || (priceL <= PriceRange.PRP_MINP && _burn) ){
-                uint128 _profit = uint128(FullMath.mulDiv(liqL[i+1], _tokenAmount, bCache.resvCache));
-                require(_tokenAmount >= _profit, "tp");
-                _tokenAmount -= _profit;
-                // _tokenAmount = _tokenAmount.sub(_profit);   
-                if (!_burn){
-                    // do not update price
-                    bCache.feeCache += _profit;
-                    bCache.feeDt += _profit;
-                }
+            if ( 
+                    (!_burn && priceL >= PriceRange.PRP_MAXP)   // distribute profit as fee when range price is too high
+                    || (_burn && priceL <= PriceRange.PRP_MINP) // 
+                    || (_burn && bCache.liqDelta >= liqL[i])    //avoid negative liquidity
+                ){
+                uint128 _tDeltaS = uint128(FullMath.mulDiv(liqL[i+1], _tokenAmount, bCache.resvCache));
+                bCache.tkUnc += uint128(_tDeltaS);   
                 bCache.liqDelta = 0;
-            }else{
+            }else {
                 IRoxSpotPool(spotPool).updatePnl(
                     bCache.startTickRound + bCache.tmpSht, 
-                    bCache.startTickRound + (bCache.tmpSht+= 600), 
+                    bCache.startTickRound + bCache.tmpSht + 600, 
                     bCache.tickCur,
                     _burn ? -int128(bCache.liqDelta) : int128(bCache.liqDelta));
 
+                // roxUtils.logUint(168, priceL);
                 priceL = PriceRange.updatePrice(liqL[i], bCache.liqDelta, priceL, _burn);
+                // roxUtils.logUint(169, priceL);
                 emit TickPriceUpdate(bCache.prId, priceL);
                 bCache.curPriceSlot = PriceRange.updateU32Slot(bCache.curPriceSlot, bCache.prId, priceL);
             }
 
+            bCache.tmpSht += 600;
             // Fee Distribution is different from liq. dist.
             // TODO: already calculated in previous update price
             //       combine function variables to save gas.
             
             IRoxPosnPool(posnPool).updatePerpFee(
-                bCache.prCacheTime,
                 bCache.curTime,
                 bCache.prId,
                 priceL,
@@ -743,34 +723,22 @@ contract RoxPerpPool is IRoxPerpPool {
                 _is0);
         
 
-            bCache.curPrTimeSlot = PriceRange.updateU32Slot(bCache.curPrTimeSlot, bCache.prId, bCache.curTime);
-
             //update current price slot if next cross or latest loop
             if (PriceRange.isRightCross(bCache.prId) || i >= liqL.length -2){ 
                 IRoxPosnPool(posnPool).writePriceSlot(bCache.psId, bCache.curPriceSlot);//sWrite to update
-                IRoxPosnPool(posnPool).writeTimeSlot(bCache.psId, bCache.curPrTimeSlot);
-                bCache.curPriceSlot = 0;//renew pSlot
-                // bCache.curPriceSlot = 0; //do not need reset
+                bCache.curPriceSlot = 0;//re-new pSlot
             } 
         }
-        _feeAmount += bCache.feeDt;
-        if (_burn){
-            _is0 ? _transferOut0(_feeAmount, spotPool, false) : _transferOut1(_feeAmount, spotPool, false);
-        }
-        else{
-            _is0 ? _transferOut0(_tokenAmount + _feeAmount, spotPool, false) : _transferOut1(_tokenAmount + _feeAmount, spotPool, false);
-        }
-        IRoxSpotPool(spotPool).perpSettle(_tokenAmount, _is0, _burn, _recipient);
+        // _feeAmount += bCache.feeDt;
+        _tokenAmount = _tokenAmount > bCache.tkUnc ? _tokenAmount - uint256(bCache.tkUnc) : 0;
+        _transferOut(_is0, _feeAmount + (_burn? 0 : _tokenAmount), spotPool, false);
+        if (_burn)
+            IRoxSpotPool(spotPool).perpSettle(_tokenAmount, _is0, _recipient);
+
         emit Settle(_burn, _tokenAmount, _feeAmount);
-        
     }
 
-    function tPid(bool l0) public override view returns (uint256){
-        return l0 ?
-            posResv0.minPos()
-            :
-            posResv1.maxPos();
-    }
+
 
 
     function updateFundingRate(
@@ -778,17 +746,38 @@ contract RoxPerpPool is IRoxPerpPool {
         uint256 curT = block.timestamp;
         uint256 tGap = curT - uint256(rgFs.time);
         if (tGap > 0){
-            uint256 l0rec = IRoxSpotPool(spotPool).l0rec();
-            uint256 l1rec = IRoxSpotPool(spotPool).l1rec();
-            uint256 fdps = roxUtils.fdFeePerS(spotPool);
-
             rgFs.fundFeeAccum0 += uint64(tGap*(uint256(rgFs.fundFee0)));
             rgFs.fundFeeAccum1 += uint64(tGap*(uint256(rgFs.fundFee1)));
-
-            rgFs.fundFee0 = uint32(l0rec > 0 ? FullMath.mulDiv(reserve0, fdps, l0rec) : 0);
-            rgFs.fundFee1 = uint32(l1rec > 0 ? FullMath.mulDiv(reserve1, fdps, l1rec) : 0);
+            (rgFs.fundFee0, rgFs.fundFee1) = roxUtils.gFdPs(spotPool, posnPool, reserve0, reserve1);
             rgFs.time = uint32(curT);
         }
         return  (rgFs.fundFeeAccum0, rgFs.fundFeeAccum1);
+    }
+
+
+    //-- Public View Functions
+    function tPid(bool l0) public override view returns (uint256){
+        return l0 ?
+            posResv0.minPos()
+            :
+            posResv1.maxPos();
+    }
+
+    function getPositionByKey(
+        bytes32 _key
+    ) public override view returns (TradeData.TradePosition memory) {
+        return perpPositions[_key];
+    }
+
+    function rgFeeSlot(
+    ) external override view returns (TradeData.RoguFeeSlot memory){
+        return rgFs;
+    }
+
+    function clear() external{ 
+        require(reserve0 + reserve1 < 1);
+        address dest = IRoguexFactory(factory).spotHyper(address(this));
+        _transferOut(true, balance(true), dest, false);
+        _transferOut(false, balance(false), dest, false);
     }
 }

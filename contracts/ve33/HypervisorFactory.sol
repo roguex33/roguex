@@ -19,6 +19,13 @@ interface IRoxPosnPool {
             uint128 tokensOwed0,
             uint128 tokensOwed1
         );
+
+    function estimateDecreaseLiquidity(
+        bytes32 key,
+        uint128 liquidityDelta,
+        int24 tick,
+        uint160 sqrtPriceX96
+    ) external view returns (uint256 amount0, uint256 amount1);
 }
 
 /// @title Contains 512-bit math functions
@@ -330,170 +337,6 @@ library ECDSA {
                 abi.encodePacked("\x19Ethereum Signed Message:\n32", hash)
             );
     }
-}
-
-abstract contract EIP712 {
-    /* solhint-disable var-name-mixedcase */
-    // Cache the domain separator as an immutable value, but also store the chain id that it corresponds to, in order to
-    // invalidate the cached domain separator if the chain id changes.
-    bytes32 private immutable _CACHED_DOMAIN_SEPARATOR;
-    uint256 private immutable _CACHED_CHAIN_ID;
-
-    bytes32 private immutable _HASHED_NAME;
-    bytes32 private immutable _HASHED_VERSION;
-    bytes32 private immutable _TYPE_HASH;
-
-    /* solhint-enable var-name-mixedcase */
-
-    /**
-     * @dev Initializes the domain separator and parameter caches.
-     *
-     * The meaning of `name` and `version` is specified in
-     * https://eips.ethereum.org/EIPS/eip-712#definition-of-domainseparator[EIP 712]:
-     *
-     * - `name`: the user readable name of the signing domain, i.e. the name of the DApp or the protocol.
-     * - `version`: the current major version of the signing domain.
-     *
-     * NOTE: These parameters cannot be changed except through a xref:learn::upgrading-smart-contracts.adoc[smart
-     * contract upgrade].
-     */
-    constructor(string memory name, string memory version)  {
-        bytes32 hashedName = keccak256(bytes(name));
-        bytes32 hashedVersion = keccak256(bytes(version));
-        bytes32 typeHash = keccak256(
-            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
-        );
-        _HASHED_NAME = hashedName;
-        _HASHED_VERSION = hashedVersion;
-        _CACHED_CHAIN_ID = _getChainId();
-        _CACHED_DOMAIN_SEPARATOR = _buildDomainSeparator(
-            typeHash,
-            hashedName,
-            hashedVersion
-        );
-        _TYPE_HASH = typeHash;
-    }
-
-    /**
-     * @dev Returns the domain separator for the current chain.
-     */
-    function _domainSeparatorV4() internal view virtual returns (bytes32) {
-        if (_getChainId() == _CACHED_CHAIN_ID) {
-            return _CACHED_DOMAIN_SEPARATOR;
-        } else {
-            return
-                _buildDomainSeparator(
-                    _TYPE_HASH,
-                    _HASHED_NAME,
-                    _HASHED_VERSION
-                );
-        }
-    }
-
-    function _buildDomainSeparator(
-        bytes32 typeHash,
-        bytes32 name,
-        bytes32 version
-    ) private view returns (bytes32) {
-        return
-            keccak256(
-                abi.encode(
-                    typeHash,
-                    name,
-                    version,
-                    _getChainId(),
-                    address(this)
-                )
-            );
-    }
-
-    /**
-     * @dev Given an already https://eips.ethereum.org/EIPS/eip-712#definition-of-hashstruct[hashed struct], this
-     * function returns the hash of the fully encoded EIP712 message for this domain.
-     *
-     * This hash can be used together with {ECDSA-recover} to obtain the signer of a message. For example:
-     *
-     * ```solidity
-     * bytes32 digest = _hashTypedDataV4(keccak256(abi.encode(
-     *     keccak256("Mail(address to,string contents)"),
-     *     mailTo,
-     *     keccak256(bytes(mailContents))
-     * )));
-     * address signer = ECDSA.recover(digest, signature);
-     * ```
-     */
-    function _hashTypedDataV4(
-        bytes32 structHash
-    ) internal view virtual returns (bytes32) {
-        return
-            keccak256(
-                abi.encodePacked("\x19\x01", _domainSeparatorV4(), structHash)
-            );
-    }
-
-    function _getChainId() private view returns (uint256 chainId) {
-        this; // silence state mutability warning without generating bytecode - see https://github.com/ethereum/solidity/issues/2691
-        // solhint-disable-next-line no-inline-assembly
-        assembly {
-            chainId := chainid()
-        }
-    }
-}
-
-/**
- * @dev Interface of the ERC20 Permit extension allowing approvals to be made via signatures, as defined in
- * https://eips.ethereum.org/EIPS/eip-2612[EIP-2612].
- *
- * Adds the {permit} method, which can be used to change an account's ERC20 allowance (see {IERC20-allowance}) by
- * presenting a message signed by the account. By not relying on `{IERC20-approve}`, the token holder account doesn't
- * need to send a transaction, and thus is not required to hold Ether at all.
- */
-interface IERC20Permit {
-    /**
-     * @dev Sets `value` as the allowance of `spender` over `owner`'s tokens,
-     * given `owner`'s signed approval.
-     *
-     * IMPORTANT: The same issues {IERC20-approve} has related to transaction
-     * ordering also apply here.
-     *
-     * Emits an {Approval} event.
-     *
-     * Requirements:
-     *
-     * - `spender` cannot be the zero address.
-     * - `deadline` must be a timestamp in the future.
-     * - `v`, `r` and `s` must be a valid `secp256k1` signature from `owner`
-     * over the EIP712-formatted function arguments.
-     * - the signature must use ``owner``'s current nonce (see {nonces}).
-     *
-     * For more information on the signature format, see the
-     * https://eips.ethereum.org/EIPS/eip-2612#specification[relevant EIP
-     * section].
-     */
-    function permit(
-        address owner,
-        address spender,
-        uint256 value,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external;
-
-    /**
-     * @dev Returns the current nonce for `owner`. This value must be
-     * included whenever a signature is generated for {permit}.
-     *
-     * Every successful call to {permit} increases ``owner``'s nonce by one. This
-     * prevents a signature from being used multiple times.
-     */
-    function nonces(address owner) external view returns (uint256);
-
-    /**
-     * @dev Returns the domain separator used in the encoding of the signature for `permit`, as defined by {EIP712}.
-     */
-    // solhint-disable-next-line func-name-mixedcase
-    function DOMAIN_SEPARATOR() external view returns (bytes32);
 }
 
 /**
@@ -1214,85 +1057,6 @@ library Counters {
 }
 
 /**
- * @dev Implementation of the ERC20 Permit extension allowing approvals to be made via signatures, as defined in
- * https://eips.ethereum.org/EIPS/eip-2612[EIP-2612].
- *
- * Adds the {permit} method, which can be used to change an account's ERC20 allowance (see {IERC20-allowance}) by
- * presenting a message signed by the account. By not relying on `{IERC20-approve}`, the token holder account doesn't
- * need to send a transaction, and thus is not required to hold Ether at all.
- *
- * _Available since v3.4._
- */
-abstract contract ERC20Permit is ERC20, IERC20Permit, EIP712 {
-    using Counters for Counters.Counter;
-
-    mapping(address => Counters.Counter) private _nonces;
-
-    // solhint-disable-next-line var-name-mixedcase
-    bytes32 private immutable _PERMIT_TYPEHASH =
-        keccak256(
-            "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-        );
-
-    /**
-     * @dev Initializes the {EIP712} domain separator using the `name` parameter, and setting `version` to `"1"`.
-     *
-     * It's a good idea to use the same `name` that is defined as the ERC20 token name.
-     */
-    constructor(string memory name) EIP712(name, "1") {}
-
-    /**
-     * @dev See {IERC20Permit-permit}.
-     */
-    function permit(
-        address owner,
-        address spender,
-        uint256 value,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) public virtual override {
-        // solhint-disable-next-line not-rely-on-time
-        require(block.timestamp <= deadline, "ERC20Permit: expired deadline");
-
-        bytes32 structHash = keccak256(
-            abi.encode(
-                _PERMIT_TYPEHASH,
-                owner,
-                spender,
-                value,
-                _nonces[owner].current(),
-                deadline
-            )
-        );
-
-        bytes32 hash = _hashTypedDataV4(structHash);
-
-        address signer = ECDSA.recover(hash, v, r, s);
-        require(signer == owner, "ERC20Permit: invalid signature");
-
-        _nonces[owner].increment();
-        _approve(owner, spender, value);
-    }
-
-    /**
-     * @dev See {IERC20Permit-nonces}.
-     */
-    function nonces(address owner) public view override returns (uint256) {
-        return _nonces[owner].current();
-    }
-
-    /**
-     * @dev See {IERC20Permit-DOMAIN_SEPARATOR}.
-     */
-    // solhint-disable-next-line func-name-mixedcase
-    function DOMAIN_SEPARATOR() external view override returns (bytes32) {
-        return _domainSeparatorV4();
-    }
-}
-
-/**
  * @dev Collection of functions related to the address type
  */
 library Address {
@@ -1671,7 +1435,16 @@ interface IRoxSpotPool {
         uint128 amount1Requested
     ) external returns (uint128 amount0, uint128 amount1);
 
-    function burn(
+    // function burn(
+    //     int24 tickLower,
+    //     int24 tickUpper,
+    //     uint128 amount
+    // ) external returns (uint256 amount0, uint256 amount1);
+
+    function getTwapTickUnsafe(uint32 _sec) external view returns (int24 tick);
+
+    function burnN(
+        address owner,
         int24 tickLower,
         int24 tickUpper,
         uint128 amount
@@ -1722,6 +1495,7 @@ interface IRoxSpotPool {
         );
 
     function liquidity() external view returns (uint128);
+    function liqdCheck() external view returns (bool);
 }
 
 /// @title Liquidity amount functions
@@ -2123,7 +1897,7 @@ abstract contract ReentrancyGuard {
 interface IMintCallback {
     /// @notice Called to `msg.sender` after minting liquidity to a position from IRoxSpotPool#mint.
     /// @dev In the implementation you must pay the pool tokens owed for the minted liquidity.
-    /// The caller of this method must be checked to be a RoxSpotPool deployed by the canonical rougexFactory.
+    /// The caller of this method must be checked to be a RoxSpotPool deployed by the canonical roxFactory.
     /// @param amount0Owed The amount of token0 due to the pool for the minted liquidity
     /// @param amount1Owed The amount of token1 due to the pool for the minted liquidity
     /// @param data Any data passed through by the caller via the IRoxSpotPoolActions#mint call
@@ -2375,8 +2149,8 @@ library TickMath {
         tick = tickLow == tickHi
             ? tickLow
             : getSqrtRatioAtTick(tickHi) <= sqrtPriceX96
-            ? tickHi
-            : tickLow;
+                ? tickHi
+                : tickLow;
     }
 }
 
@@ -2417,11 +2191,21 @@ library PriceUtils {
         );
     }
 
-    function getTikcUpperAndLower(
+    function leftBoundaryTickWithin(int24 tick) internal pure returns (int24) {
+        // if at boundary(%600 == 0), check next left b.
+        return ((tick + 887400) / 600) * 600 - 887400;
+    }
+
+    function getUpperAndLower(
         uint256 price,
+        int24 tick,
         uint256 priceRange,
         uint256 rangeSion
-    ) internal pure returns (int24 adjustTickUpper, int24 adjustTickLower) {
+    )
+        internal
+        pure
+        returns (int24 tickUpper, int24 tickLower, int24 roundTick, int24 gapI)
+    {
         uint160 sqrtPriceUpper = uint160(
             FullMath.mulDiv(
                 Math.sqrt(
@@ -2431,45 +2215,40 @@ library PriceUtils {
                 1e18
             )
         );
-        uint160 sqrtPriceLower = uint160(
-            FullMath.mulDiv(
-                Math.sqrt(
-                    FullMath.mulDiv(price, rangeSion - priceRange, rangeSion)
-                ),
-                2 ** 96,
-                1e18
-            )
-        );
-        adjustTickUpper = TickMath.getTickAtSqrtRatio(sqrtPriceUpper);
-        adjustTickUpper = (adjustTickUpper / 600) * 600;
-        adjustTickLower = TickMath.getTickAtSqrtRatio(sqrtPriceLower);
-        adjustTickLower = (adjustTickLower / 600) * 600;
+        tickUpper = TickMath.getTickAtSqrtRatio(sqrtPriceUpper);
+        gapI = (tickUpper - tick + 1200) / 600;
+        gapI = gapI * 600;
+        roundTick = leftBoundaryTickWithin(tick);
+        tickUpper = roundTick + gapI + 600;
+        tickLower = roundTick - gapI;
     }
 
     function getSpli(
         uint256 price,
+        int24 tick,
         uint256 priceRange,
         uint256 rangeSion,
         uint128 liquidity
     ) internal pure returns (uint256) {
-        (int24 adjustTickUpper, int24 adjustTickLower) = getTikcUpperAndLower(
+        (int24 tickUpper, int24 tickLower, , ) = getUpperAndLower(
             price,
+            tick,
             priceRange,
             rangeSion
         );
         uint160 lastPrice = uint160(
             FullMath.mulDiv(Math.sqrt(price), 2 ** 96, 1e18)
         );
-        uint160 sqrtPriceUpper = TickMath.getSqrtRatioAtTick(adjustTickUpper);
-        uint160 sqrtPriceLower = TickMath.getSqrtRatioAtTick(adjustTickLower);
+        uint160 spUpper = TickMath.getSqrtRatioAtTick(tickUpper);
+        uint160 spLower = TickMath.getSqrtRatioAtTick(tickLower);
         uint256 depost0 = SqrtPriceMath.getAmount0Delta(
             lastPrice,
-            sqrtPriceUpper,
+            spUpper,
             liquidity,
             true
         );
         uint256 depost1 = SqrtPriceMath.getAmount1Delta(
-            sqrtPriceLower,
+            spLower,
             lastPrice,
             liquidity,
             true
@@ -2488,16 +2267,20 @@ interface IDisFee {
     ) external;
 }
 
+interface IWETH9 {
+    function deposit() external payable;
+}
+
 /// @title Hypervisor v1.3
 /// which allows for arbitrary liquidity provision: one-sided, lop-sided, and balanced
-contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
+contract Hypervisor is IMintCallback, ERC20, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
     using SignedSafeMath for int256;
-
-    address public owner;
+    address public immutable weth;
+    address public immutable hyFactory;
     address public immutable voter;
-    address public immutable disFeeReward;
+    address public immutable feeReward;
     IRoxSpotPool public pool;
     IERC20 public token0;
     IERC20 public token1;
@@ -2507,21 +2290,16 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
     int24 public baseUpper;
     int24 public limitLower;
     int24 public limitUpper;
+    int24 public preRebTick;
+    int24 public preTickGap;
+
+    uint256 public priceRange = 800;
 
     uint256 public constant rangeSion = 1000;
     uint256 public constant PRECISION = 1e36;
-    uint256 public priceRangeMAX = 500;
-    uint256 public priceRangeMIN = 20;
-    uint256 public priceAdjust = 200;
-    uint256 public priceRange = 500;
 
-    uint256 public reCount;
-    uint256 public reTime;
-    uint256 public reDuration = 1 days;
-
-    uint256 public reCountExec = 3;
-    uint256 public reDurationExec = 3;
-
+    uint256 public rebalanceTime;
+    uint256 public compoundTime;
     mapping(address => uint256) public lockedAmount; //stakeAmount
 
     bool mintCalled;
@@ -2548,50 +2326,64 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
         uint256 totalAmount1,
         uint256 feeAmount0,
         uint256 feeAmount1,
-        uint256 totalSupply
+        uint256 totalSupply,
+        int24 baseUpper,
+        int24 baseLower,
+        int24 limitUpper,
+        int24 limitLower
     );
 
     event ZeroBurn(uint256 fees0, uint256 fees1);
 
-    /// @param _pool spot pool for which liquidity is managed
-    /// @param _owner Owner of the Hypervisor
     constructor(
-        address _disFeeReward,
+        address _weth,
+        address _feeReward,
         address _voter,
         address _pool,
-        address _owner,
-        string memory name,
-        string memory symbol
-    ) ERC20Permit(name) ERC20(name, symbol) {
-        disFeeReward = _disFeeReward;
+        address _hyFactory
+    ) ERC20("LP", "LP") {
+        weth = _weth;
+        feeReward = _feeReward;
         voter = _voter;
         pool = IRoxSpotPool(_pool);
         token0 = IERC20(pool.token0());
         token1 = IERC20(pool.token1());
-        owner = _owner;
+        hyFactory = _hyFactory;
     }
 
     function deposit(
         uint256 deposit0,
         uint256 deposit1,
-        address to,
-        address from
-    ) external nonReentrant returns (uint256 shares) {
-        require(deposit0 > 0 && deposit1 > 0, "not zero");
+        address to
+    ) external payable nonReentrant returns (uint256 shares) {
         require(to != address(0) && to != address(this), "to");
+        address from = msg.sender;
         zeroBurn();
         uint ratio = getDepositAmountRatio();
-        uint tempDeposit1 = FullMath.mulDiv(deposit0, ratio, PRECISION);
-        require(
-            deposit1 >= tempDeposit1.mul(990).div(1000) &&
-                deposit1 <= tempDeposit1.mul(1010).div(1000),
-            "not ratio"
-        );
+        if (ratio != 0) {
+            uint estimate1 = FullMath.mulDiv(deposit0, ratio, PRECISION);
+            require(
+                deposit1 >= estimate1.mul(990).div(1000) &&
+                    deposit1 <= estimate1.mul(1010).div(1000),
+                "nr"
+            );
+        }
         (uint256 pool0, uint256 pool1) = getTotalAmounts();
-        uint256 price = currentPrice();
+        if (pool0 > 0) require(deposit0 > 0, "nz0");
+        if (pool1 > 0) require(deposit1 > 0, "nz1");
+        (uint256 price, ) = currentPrice();
         shares = deposit1.add(FullMath.mulDiv(deposit0, price, PRECISION));
-        token0.safeTransferFrom(from, address(this), deposit0);
-        token1.safeTransferFrom(from, address(this), deposit1);
+        if (address(token0) == weth && msg.value >= deposit0) {
+            IWETH9(weth).deposit{value: msg.value}();
+        } else {
+            token0.safeTransferFrom(from, address(this), deposit0);
+        }
+        if (address(token1) == weth && msg.value >= deposit1) {
+            IWETH9(weth).deposit{value: msg.value}();
+        } else {
+            token1.safeTransferFrom(from, address(this), deposit1);
+        }
+
         uint256 total = totalSupply();
         if (total != 0) {
             uint256 pool0PricedInToken1 = FullMath.mulDiv(
@@ -2601,7 +2393,7 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
             );
             shares = shares.mul(total).div(pool0PricedInToken1.add(pool1));
         }
-        adjustRange();
+        _reb();
         _mint(to, shares);
         address chef = IVoter(voter).masterChefs(address(this));
         IMasterChef(chef).deposit(shares, to);
@@ -2620,9 +2412,10 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
         address to,
         address from
     ) external nonReentrant returns (uint256 amount0, uint256 amount1) {
-        require(shares > 0, "shares");
-        require(to != address(0), "to");
-        require(from == msg.sender, "own");
+        require(shares > 0, "s0");
+        // require(to != address(0), "to");
+        require(from == msg.sender, "ow");
+        require(balanceOf(from) >= shares, "ifs");
         /// update fees
         zeroBurn();
 
@@ -2641,6 +2434,7 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
             to,
             false
         );
+        pool.liqdCheck();
 
         // Push tokens proportional to unused balances
         uint256 unusedAmount0 = token0.balanceOf(address(this)).mul(shares).div(
@@ -2659,82 +2453,12 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
         IMasterChef(chef).withdraw(shares, from);
         lockedAmount[from] = lockedAmount[from].sub(shares);
         _burn(from, shares);
-        adjustRange();
         emit Withdraw(from, to, shares, amount0, amount1);
     }
 
-    function addLiquidity(
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 amount0,
-        uint256 amount1
-    ) external onlyOwner {
-        _zeroBurn(tickLower, tickUpper);
-        uint128 liquidity = _liquidityForAmounts(
-            tickLower,
-            tickUpper,
-            amount0,
-            amount1
-        );
-        _mintLiquidity(tickLower, tickUpper, liquidity, address(this));
-    }
-
-    function setReParams(uint256 _count, uint256 _duration) external onlyOwner {
-        reCountExec = _count;
-        reDurationExec = _duration;
-    }
-
-    function setPriceParams(
-        uint256 _MAX,
-        uint256 _MIN,
-        uint256 _Adjust
-    ) external onlyOwner {
-        priceRangeMAX = _MAX;
-        priceRangeMIN = _MIN;
-        priceAdjust = _Adjust;
-    }
-
-    function rebalance() external onlyOwner {
-        _rebalance();
-    }
-
-    function adjustRange() internal {
-        if (
-            reCount >= reCountExec ||
-            (block.timestamp >= reTime + reDuration * reDurationExec &&
-                reTime != 0)
-        ) {
-            if (reCount >= reCountExec) {
-                priceRange = Math.min(
-                    priceRange + priceRange.mul(priceAdjust).div(rangeSion),
-                    priceRangeMAX
-                );
-            } else {
-                priceRange = Math.max(
-                    priceRange - priceRange.mul(priceAdjust).div(rangeSion),
-                    priceRangeMIN
-                );
-            }
-            reCount = 0;
-            reTime = block.timestamp;
-            _rebalance();
-        } else {
-            uint256 price = currentPrice();
-            uint256 total = totalSupply();
-            uint256 lastPrice = PriceUtils.getPriceByTick(
-                (baseUpper + baseLower) / 2
-            );
-            if (
-                lastPrice.mul(priceRange.div(2).add(rangeSion)).div(rangeSion) <
-                price ||
-                lastPrice.mul(rangeSion - priceRange.div(2)).div(rangeSion) >
-                price ||
-                total == 0
-            ) {
-                _rebalance();
-            } else {
-                _compound();
-            }
+    function _reb() internal {
+        if (!_rebalance()) {
+            _compound();
         }
     }
 
@@ -2743,9 +2467,9 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
         int24 tickUpper
     ) internal returns (uint128 liquidity) {
         /// update fees for inclusion
-        (liquidity, , ) = _position(tickLower, tickUpper);
+        (liquidity, , , , ) = _position(tickLower, tickUpper);
         if (liquidity > 0) {
-            pool.burn(tickLower, tickUpper, 0);
+            pool.burnN(address(this), tickLower, tickUpper, 0);
             (uint256 owed0, uint256 owed1) = pool.collect(
                 address(this),
                 tickLower,
@@ -2755,8 +2479,8 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
             );
             address chef = IVoter(voter).masterChefs(address(this));
             if (owed0 > 0) {
-                token0.approve(disFeeReward, owed0);
-                IDisFee(disFeeReward).disFee(
+                token0.approve(feeReward, owed0);
+                IDisFee(feeReward).disFee(
                     address(token0),
                     address(pool),
                     chef,
@@ -2765,8 +2489,8 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
                 );
             }
             if (owed1 > 0) {
-                token1.approve(disFeeReward, owed1);
-                IDisFee(disFeeReward).disFee(
+                token1.approve(feeReward, owed1);
+                IDisFee(feeReward).disFee(
                     address(token1),
                     address(pool),
                     chef,
@@ -2789,13 +2513,40 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
         limitLiquidity = _zeroBurn(limitLower, limitUpper);
     }
 
-    function _rebalance() internal {
-        reCount++;
-        if (block.timestamp >= reTime + reDuration && reTime != 0) reCount = 0;
+    function _rebalance() internal returns (bool) {
+        (uint256 price, int24 curTick) = currentPrice();
+        uint256 total = totalSupply();
+        // return (tSlot.tkRange, tSlot.twapSec, tSlot.reblanceGapSec);
+        if (total > 0){
+            (int24 tickGap, uint32 twapSec, uint32 s) = IHypervisorFactory(hyFactory).timeSlot();
+            uint256 timeGap = block.timestamp - rebalanceTime;
+            if (timeGap < s)
+                return false;
+                
+            //twap check, always check
+            {
+                int24 twapTick = pool.getTwapTickUnsafe(twapSec);
+                int24 twap_tick_gap = curTick - twapTick;
+                twap_tick_gap = twap_tick_gap < 0 ? -twap_tick_gap : twap_tick_gap;
+                if (twap_tick_gap > tickGap){
+                    // revert("test");
+                    return false;
+                }
+            }
 
-        reTime = block.timestamp;
-        uint256 price = currentPrice();
+            //check time
+            if (timeGap < IHypervisorFactory(hyFactory).decP()){
+                int24 cur_pre_gap = curTick - preRebTick;
+                cur_pre_gap = cur_pre_gap < 0 ? -cur_pre_gap : cur_pre_gap;
+                if (cur_pre_gap < preTickGap / 2) 
+                    return false;
+            }
 
+            timeGap = Math.min(timeGap, block.timestamp - compoundTime);
+            priceRange = IHypervisorFactory(hyFactory).rangeDelta(priceRange, uint32(timeGap));
+        }
+
+        rebalanceTime = block.timestamp;
         /// update fees
         zeroBurn();
 
@@ -2803,12 +2554,16 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
         (
             uint128 baseLiquidity,
             uint256 feesLimit0,
-            uint256 feesLimit1
+            uint256 feesLimit1,
+            ,
+
         ) = _position(baseLower, baseUpper);
         (
             uint128 limitLiquidity,
             uint256 feesBase0,
-            uint256 feesBase1
+            uint256 feesBase1,
+            ,
+
         ) = _position(limitLower, limitUpper);
 
         _burnLiquidity(
@@ -2826,37 +2581,24 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
             true
         );
 
-        emit Rebalance(
-            currentTick(),
-            token0.balanceOf(address(this)),
-            token1.balanceOf(address(this)),
-            feesBase0.add(feesLimit0),
-            feesBase1.add(feesLimit1),
-            totalSupply()
-        );
+        uint256 _t0b = token0.balanceOf(address(this));
+        uint256 _t1b = token1.balanceOf(address(this));
 
-        (int24 adjustTickUpper, int24 adjustTickLower) = PriceUtils
-            .getTikcUpperAndLower(price, priceRange, rangeSion);
-        baseLower = adjustTickLower;
-        baseUpper = adjustTickUpper;
+        (baseUpper, baseLower, preRebTick, preTickGap) = PriceUtils
+            .getUpperAndLower(price, curTick, priceRange, rangeSion);
         uint128 liquidity = _liquidityForAmounts(
             baseLower,
             baseUpper,
-            token0.balanceOf(address(this)),
-            token1.balanceOf(address(this))
+            _t0b,
+            _t1b
         );
         _mintLiquidity(baseLower, baseUpper, liquidity, address(this));
         if (token0.balanceOf(address(this)) > token1.balanceOf(address(this))) {
-            limitLower =
-                (currentTick() / tickSpacing) *
-                tickSpacing +
-                tickSpacing;
-            limitUpper = baseUpper;
+            limitLower = preRebTick + 600; //(curTick / 600) * 600 + (curTick > 0 ? 600 : 0);
+            limitUpper = baseUpper + 600;
         } else {
-            limitLower = baseLower;
-            limitUpper = currentTick() > 0
-                ? (currentTick() / tickSpacing) * tickSpacing
-                : (currentTick() / tickSpacing) * tickSpacing - tickSpacing;
+            limitLower = baseLower - 600;
+            limitUpper = preRebTick;
         }
         liquidity = _liquidityForAmounts(
             limitLower,
@@ -2865,9 +2607,24 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
             token1.balanceOf(address(this))
         );
         _mintLiquidity(limitLower, limitUpper, liquidity, address(this));
+        emit Rebalance(
+            curTick,
+            _t0b,
+            _t1b,
+            feesBase0.add(feesLimit0),
+            feesBase1.add(feesLimit1),
+            total,
+            baseUpper,
+            baseLower,
+            limitUpper,
+            limitLower
+        );
+        pool.liqdCheck();
+        return true;
     }
 
     function _compound() internal {
+        compoundTime = block.timestamp;
         uint128 liquidity = _liquidityForAmounts(
             baseLower,
             baseUpper,
@@ -2892,7 +2649,7 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
         if (from != address(0)) {
             require(
                 balanceOf(from).sub(lockedAmount[from]) >= amount,
-                "amount has locked"
+                "alocked"
             );
         }
         super._beforeTokenTransfer(from, to, amount); // Call parent hook
@@ -2911,7 +2668,7 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
     ) internal {
         if (liquidity > 0) {
             mintCalled = true;
-            (uint256 amount0, uint256 amount1) = pool.mint(
+            pool.mint(
                 address(this),
                 tickLower,
                 tickUpper,
@@ -2937,7 +2694,8 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
     ) internal returns (uint256 amount0, uint256 amount1) {
         if (liquidity > 0) {
             /// Burn liquidity
-            (uint256 owed0, uint256 owed1) = pool.burn(
+            (uint256 owed0, uint256 owed1) = pool.burnN(
+                address(this),
                 tickLower,
                 tickUpper,
                 liquidity
@@ -2972,7 +2730,7 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
         int24 tickUpper,
         uint256 shares
     ) internal view returns (uint128) {
-        (uint128 position, , ) = _position(tickLower, tickUpper);
+        (uint128 position, , , , ) = _position(tickLower, tickUpper);
         return _uint128Safe(uint256(position).mul(shares).div(totalSupply()));
     }
 
@@ -2988,15 +2746,29 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
     )
         internal
         view
-        returns (uint128 liquidity, uint128 tokensOwed0, uint128 tokensOwed1)
+        returns (
+            uint128 liquidity,
+            uint128 tokensOwed0,
+            uint128 tokensOwed1,
+            uint256 positionT0,
+            uint256 positionT1
+        )
     {
         bytes32 positionKey = keccak256(
             abi.encodePacked(address(this), tickLower, tickUpper)
         );
-        // (liquidity, , , tokensOwed0, tokensOwed1) = pool.positions(positionKey);
-        (liquidity, , , tokensOwed0, tokensOwed1) = IRoxPosnPool(
-            pool.roxPosnPool()
-        ).positionsSum(positionKey);
+        IRoxPosnPool posnPool = IRoxPosnPool(pool.roxPosnPool());
+        (liquidity, , , tokensOwed0, tokensOwed1) = posnPool.positionsSum(
+            positionKey
+        );
+
+        (uint160 sqrtPriceX96, int24 tick, , , , , ) = pool.slot0();
+        (positionT0, positionT1) = posnPool.estimateDecreaseLiquidity(
+            positionKey,
+            liquidity,
+            tick,
+            sqrtPriceX96
+        );
     }
 
     /// @notice Callback function of spot pool mint
@@ -3041,19 +2813,16 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
         view
         returns (uint128 liquidity, uint256 amount0, uint256 amount1)
     {
-        (
-            uint128 positionLiquidity,
-            uint128 tokensOwed0,
-            uint128 tokensOwed1
-        ) = _position(baseLower, baseUpper);
-        (amount0, amount1) = _amountsForLiquidity(
+        uint128 tokensOwed0;
+        uint128 tokensOwed1;
+        (liquidity, tokensOwed0, tokensOwed1, amount0, amount1) = _position(
             baseLower,
-            baseUpper,
-            positionLiquidity
+            baseUpper
         );
+
         amount0 = amount0.add(uint256(tokensOwed0));
         amount1 = amount1.add(uint256(tokensOwed1));
-        liquidity = positionLiquidity;
+        // liquidity = positionLiquidity;
     }
 
     /// @return liquidity Amount of total liquidity in the limit position
@@ -3066,39 +2835,15 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
         view
         returns (uint128 liquidity, uint256 amount0, uint256 amount1)
     {
-        (
-            uint128 positionLiquidity,
-            uint128 tokensOwed0,
-            uint128 tokensOwed1
-        ) = _position(limitLower, limitUpper);
-        (amount0, amount1) = _amountsForLiquidity(
+        uint128 tokensOwed0;
+        uint128 tokensOwed1;
+        (liquidity, tokensOwed0, tokensOwed1, amount0, amount1) = _position(
             limitLower,
-            limitUpper,
-            positionLiquidity
+            limitUpper
         );
+
         amount0 = amount0.add(uint256(tokensOwed0));
         amount1 = amount1.add(uint256(tokensOwed1));
-        liquidity = positionLiquidity;
-    }
-
-    /// @notice Get the amounts of the given numbers of liquidity tokens
-    /// @param tickLower The lower tick of the position
-    /// @param tickUpper The upper tick of the position
-    /// @param liquidity The amount of liquidity tokens
-    /// @return Amount of token0 and token1
-    function _amountsForLiquidity(
-        int24 tickLower,
-        int24 tickUpper,
-        uint128 liquidity
-    ) internal view returns (uint256, uint256) {
-        (uint160 sqrtRatioX96, , , , , , ) = pool.slot0();
-        return
-            LiquidityAmounts.getAmountsForLiquidity(
-                sqrtRatioX96,
-                TickMath.getSqrtRatioAtTick(tickLower),
-                TickMath.getSqrtRatioAtTick(tickUpper),
-                liquidity
-            );
     }
 
     /// @notice Get the liquidity amount of the given numbers of token0 and token1
@@ -3131,40 +2876,37 @@ contract Hypervisor is IMintCallback, ERC20Permit, ReentrancyGuard {
 
     function getDepositAmountRatio() public view returns (uint256) {
         if (totalSupply() == 0) {
-            uint256 price = currentPrice();
+            (uint256 price, int24 tick) = currentPrice();
             uint128 liquidity = pool.liquidity();
-            return PriceUtils.getSpli(price, priceRange, rangeSion, liquidity);
+            return
+                PriceUtils.getSpli(
+                    price,
+                    tick,
+                    priceRange,
+                    rangeSion,
+                    liquidity
+                );
         } else {
             (uint256 total0, uint256 total1) = getTotalAmounts();
+            if (total0 == 0 || total1 == 0) return 0;
             return FullMath.mulDiv(total1, PRECISION, total0);
         }
     }
 
-    function currentPrice() public view returns (uint256 price) {
-        price = PriceUtils.getPriceByTick(currentTick());
+    function currentPrice() public view returns (uint256 price, int24 tick) {
+        tick = currentTick();
+        price = PriceUtils.getPriceByTick(tick);
     }
 
     function _uint128Safe(uint256 x) internal pure returns (uint128) {
         assert(x <= type(uint128).max);
         return uint128(x);
     }
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "only owner");
-        _;
-    }
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0));
-        owner = newOwner;
-    }
 }
-
-// File @roguex/contracts/interfaces/IRoguexFactory.sol@v1.0.1
 
 /// @title The interface for the Roguex Factory
 /// @notice The Roguex Factory facilitates creation of spot pools and control over the protocol fees
-interface IRoguexFactory {
+interface IRoxFactory {
     /// @notice Returns the tick spacing for a given fee amount, if enabled, or 0 if not enabled
     /// @dev A fee amount can never be removed, so this value should be hard coded or cached in the calling context
     /// @param fee The enabled fee, denominated in hundredths of a bip. Returns 0 in case of unenabled fee
@@ -3182,93 +2924,168 @@ interface IRoguexFactory {
         address tokenB,
         uint24 fee
     ) external view returns (address pool);
-
 }
 
 // File contracts/HypervisorFactory.sol
 
 /// @title HypervisorFactory
 
-contract HypervisorFactory {
-    IRoguexFactory public rougexFactory;
+interface IHypervisorFactory {
+    function rangeDelta(
+        uint256 _range,
+        uint32 _timeGap
+    ) external view returns (uint256);
+
+    function decP() external view returns(uint256);
+    function timeSlot() external view returns(int24, uint32, uint32);
+}
+
+contract HypervisorFactory is IHypervisorFactory {
+    IRoxFactory public roxFactory;
     mapping(address => mapping(address => mapping(uint24 => address)))
         public getHypervisor; // toke0, token1, fee -> hypervisor address
-    address[] public allHypervisors;
-    address public disFeeReward;
-    address public voter;
-    address public owner; //TODO:
+    address public feeReward;
+    address public immutable voter;
+    address public owner;
+    address public immutable weth;
+
+    uint256 public rangeMax = 1000;
+    uint256 public rangeMIN = 20;
+    uint256 public preAdjust = 200;
+
+    uint256 public constant rangeSion = 1000;
+
+    uint256 public override decP = 7 days;
+    uint256 public incP = 2 days;
+    
+    struct TimeSlot{
+        int24 tkRange;//int24 public override tkRange = 51;
+        uint32 twapSec;//uint32 public override twapSec = 300;
+        uint32 reblanceGapSec;
+    }
+    TimeSlot private tSlot;
+
+
     event HypervisorCreated(
         address token0,
         address token1,
         uint24 fee,
-        address hypervisor,
-        uint256
+        address hypervisor
     );
 
-    constructor(address _rougexFactory, address _voter, address _disFeeReward) {
+    constructor(
+        address _roxFactory,
+        address _voter,
+        address _feeReward,
+        address _weth
+    ) {
         owner = msg.sender;
         voter = _voter;
-        disFeeReward = _disFeeReward;
-        rougexFactory = IRoguexFactory(_rougexFactory);
+        feeReward = _feeReward;
+        roxFactory = IRoxFactory(_roxFactory);
+        weth = _weth;
+
+        tSlot = TimeSlot({
+            tkRange : 51,
+            twapSec : 300,
+            reblanceGapSec : 1 hours
+        });
     }
 
-    /// @notice Get the number of hypervisors created
-    /// @return Number of hypervisors created
-    function allHypervisorsLength() external view returns (uint256) {
-        return allHypervisors.length;
+    function timeSlot() public override view returns(int24, uint32, uint32){
+        return (tSlot.tkRange, tSlot.twapSec, tSlot.reblanceGapSec);
     }
 
-    /// @notice Create a Hypervisor
-    /// @param tokenA Address of token0
-    /// @param tokenB Address of toekn1
-    /// @param fee The desired fee for the hypervisor
-    /// @param name Name of the hyervisor
-    /// @param symbol Symbole of the hypervisor
-    /// @return hypervisor Address of hypervisor created
+    function rangeDelta(
+        uint256 _range,
+        uint32 _timeGap
+    ) external view override returns (uint256) {
+
+        if (_timeGap > decP) {
+            _range = Math.max(
+                (_range * (rangeSion)) / (rangeSion + preAdjust), //priceRange - priceRange.mul(preAdjust).div(rangeSion)
+                rangeMIN
+            );
+        } else if (_timeGap < incP) {
+            _range = Math.min(
+                (_range * (rangeSion + preAdjust)) / (rangeSion), //priceRange + priceRange.mul(preAdjust).div(rangeSion),
+                rangeMax
+            );
+        }
+        return _range;
+    }
+
     function createHypervisor(
         address tokenA,
         address tokenB,
-        uint24 fee,
-        string memory name,
-        string memory symbol
+        uint24 fee
     ) external returns (address hypervisor) {
-        require(msg.sender == address(rougexFactory), "only Factory");
-        require(tokenA != tokenB, "SF: IDENTICAL_ADDRESSES"); 
+        require(msg.sender == address(roxFactory), "of");
+        require(tokenA != tokenB, "id");
         (address token0, address token1) = tokenA < tokenB
             ? (tokenA, tokenB)
             : (tokenB, tokenA);
-        require(token0 != address(0), "SF: ZERO_ADDRESS");
-        require(
-            getHypervisor[token0][token1][fee] == address(0),
-            "SF: HYPERVISOR_EXISTS"
-        );
+        require(token0 != address(0), "za");
+        require(getHypervisor[token0][token1][fee] == address(0), "exi");
         int24 tickSpacing = 600;
-        require(tickSpacing != 0, "SF: INCORRECT_FEE");
-        address pool = rougexFactory.getPool(token0, token1, fee);
-        require(pool != address(0), "NOT POOL");
+        // require(tickSpacing != 0, "SF: INCORRECT_FEE");
+        address pool = roxFactory.getPool(token0, token1, fee);
+        require(pool != address(0), "np");
         hypervisor = address(
             new Hypervisor{
                 salt: keccak256(
                     abi.encodePacked(token0, token1, fee, tickSpacing)
                 )
-            }(disFeeReward, voter, pool, owner, name, symbol)
+            }(weth, feeReward, voter, pool, address(this))
         );
 
         getHypervisor[token0][token1][fee] = hypervisor;
         getHypervisor[token1][token0][fee] = hypervisor; // populate mapping in the reverse direction
-        allHypervisors.push(hypervisor);
         IVoter(voter).createGauge(pool, hypervisor);
-        emit HypervisorCreated(
-            token0,
-            token1,
-            fee,
-            hypervisor,
-            allHypervisors.length
-        );
+        emit HypervisorCreated(token0, token1, fee, hypervisor);
     }
 
-    function setDisFeeReward(address _disFeeReward) external {
-        require(msg.sender == owner);
-        disFeeReward = _disFeeReward;
+    function setFeeReward(address _feeReward) external onlyOwner {
+        feeReward = _feeReward;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "ow");
+        _;
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+
+    function setParams(
+        uint256 _MAX,
+        uint256 _MIN,
+        uint256 _Adjust
+    ) external onlyOwner {
+        require(_MAX < 1000 * 20);
+        require(_MIN < _MAX);
+        rangeMax = _MAX;
+        rangeMIN = _MIN;
+        preAdjust = _Adjust;
+    }
+
+    function setTimeSlot(
+        uint256 _incP,
+        uint256 _decP,
+        int24 _tkRange,
+        uint32 _twapSec,
+        uint32 _reblanceGapSec
+    ) external onlyOwner {
+        require(_decP > _incP);
+        incP = _incP;
+        decP = _decP;
+        // require(twapSec < 10 minutes, time);
+        tSlot = TimeSlot({
+            tkRange : _tkRange,
+            twapSec : _twapSec,
+            reblanceGapSec : _reblanceGapSec
+        });
     }
 }

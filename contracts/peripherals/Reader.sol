@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/math/SafeMath.sol";
 import "../interfaces/IRoxSpotPool.sol";
 import "../interfaces/IRoxPerpPool.sol";
 import "../interfaces/IRoxUtils.sol";
+import "../interfaces/IPerpUtils.sol";
 import "../libraries/TradeData.sol";
 import "../libraries/TradeMath.sol";
 import "../libraries/PosRange.sol";
@@ -15,6 +16,7 @@ import "../libraries/TickMath.sol";
 import "../libraries/LiquidityMath.sol";
 import "../libraries/SqrtPriceMath.sol";
 import "../libraries/PriceRange.sol";
+import '../libraries/TickRange.sol';
 
 interface IPerpRouter {
     function getPositionKeys(
@@ -90,8 +92,8 @@ contract Reader {
 
     function poolReserveRate(address _spotPool) public view returns (uint256 rate0, uint256 rate1){
         (uint256 r0, uint256 r1) = IRoxSpotPool(_spotPool).availableReserve(true, true);
-        uint256 l0rec = IRoxSpotPool(_spotPool).l0rec();
-        uint256 l1rec = IRoxSpotPool(_spotPool).l1rec();
+        uint256 l0rec = IRoxSpotPool(_spotPool).balance0();
+        uint256 l1rec = IRoxSpotPool(_spotPool).balance1();
         IRoxPerpPool perpPool = IRoxPerpPool(IRoxSpotPool(_spotPool).roxPerpPool());
 
         rate0 = r0 > 0 ? 
@@ -123,6 +125,7 @@ contract Reader {
         uint256 fee;
         uint256 feeDist;
         uint256 profitDelta;
+        uint256 profitFac;
         uint256 posFee;
         uint256 origCollateral;
         uint256 colAfterfee;
@@ -147,6 +150,7 @@ contract Reader {
         )
     {
         position = IRoxPerpPool(_perpPool).getPositionByKey(_key);
+        address _spotPool = IRoxPerpPool(_perpPool).spotPool();
         dCache.origCollateral = position.collateral;
         dCache.origSize = position.size;
 
@@ -187,7 +191,10 @@ contract Reader {
                 uint256(rgFs.fundFeeAccum1) + (block.timestamp - rgFs.time).mul(uint256(rgFs.fundFee1));
 
             // collect funding fee
-            dCache.fee = FullMath.mulDiv(position.size, dCache.posFee - uint256(position.entryFdAccum), 1e9);
+            dCache.fee = dCache.posFee > uint256(position.entryFdAccum) ? 
+                                FullMath.mulDiv(position.size, dCache.posFee - uint256(position.entryFdAccum), 1e10)
+                                :
+                                0;
 
             position.entryFdAccum = uint64(dCache.posFee);
            
@@ -198,12 +205,20 @@ contract Reader {
             dCache.posFee = roxUtils.collectPosFee(position.size, IRoxPerpPool(_perpPool).spotPool());
         }
         // Calculate PNL
-        (dCache.hasProfit, dCache.profitDelta) = TradeMath.getDelta(
-            position.long0,
-            uint256(position.entrySqrtPriceX96),
+        // (dCache.hasProfit, dCache.profitDelta) = TradeMath.getDelta(
+        //     position.long0,
+        //     uint256(position.entrySqrtPriceX96),
+        //     dCache.closePrice,
+        //     position.size
+        // );
+
+        (dCache.hasProfit, dCache.profitDelta, dCache.profitFac) = roxUtils.getDelta(
+            _spotPool,
             dCache.closePrice,
-            position.size
-        );
+            position
+        );  
+
+
         // Position validation
         {
             uint256 fullDec = dCache.fee +
@@ -331,6 +346,7 @@ contract Reader {
         )
     {
         position = IRoxPerpPool(_perpPool).getPositionByKey(_key);
+        address _spotPool = IRoxPerpPool(_perpPool).spotPool();
         dCache.origCollateral = position.collateral;
         dCache.origSize = position.size;
 
@@ -364,7 +380,10 @@ contract Reader {
                 uint256(rgFs.fundFeeAccum1) + (block.timestamp - rgFs.time).mul(uint256(rgFs.fundFee1));
 
             // collect funding fee
-            dCache.fee = FullMath.mulDiv(position.size, dCache.posFee - uint256(position.entryFdAccum), 1e9);
+            dCache.fee = dCache.posFee > uint256(position.entryFdAccum) ? 
+                        FullMath.mulDiv(position.size, dCache.posFee - uint256(position.entryFdAccum), 1e10)
+                        :
+                        0;
 
             position.entryFdAccum = uint64(dCache.posFee);
            
@@ -375,12 +394,13 @@ contract Reader {
             dCache.posFee = roxUtils.collectPosFee(position.size, IRoxPerpPool(_perpPool).spotPool());
         }
         // Calculate PNL
-        (dCache.hasProfit, dCache.profitDelta) = TradeMath.getDelta(
-            position.long0,
-            uint256(position.entrySqrtPriceX96),
+
+        (dCache.hasProfit, dCache.profitDelta, dCache.profitFac) = roxUtils.getDelta(
+            _spotPool,
             dCache.closePrice,
-            position.size
-        );
+            position
+        );  
+
         // Position validation
         {
             uint256 fullDec = dCache.fee +
@@ -582,6 +602,7 @@ contract Reader {
                 _sizeDelta,
                 _long0, 
                 false);
+                
         // Update Collateral
         {
             //transfer in collateral is same as long direction
@@ -630,7 +651,8 @@ contract Reader {
                                 :
                                 rgFs.fundFeeAccum1 + uint64(uint256(iCache.curTime - rgFs.time) * (uint256(rgFs.fundFee1)));
                     if (position.entryFdAccum > 0){
-                        uint256 _ufee = FullMath.mulDiv(position.size, uint256(curAcum - position.entryFdAccum), 1e9);
+                        uint256 _ufee = FullMath.mulDiv(position.size, 
+                                curAcum > position.entryFdAccum ? uint256(curAcum - position.entryFdAccum) : 0, 1e10);
                         require(position.collateral > _ufee, "uCol");
                         position.collateral -= _ufee;
                         position.uncollectFee = position.uncollectFee.addu128(uint128(_ufee));
@@ -793,36 +815,53 @@ contract Reader {
         uint256 spreadEstimated,
         uint256 size
     ) public pure returns (uint256 liqPriceSqrtX96) {
-        if (size < 1  || collateral < 1)
+        if (size < 1  || collateral < 1 || size < collateral)
             return 0;
-
 
         uint256 pRg = FullMath.mulDiv(collateral, 1000000, size);
         pRg = pRg > spreadEstimated ? pRg - spreadEstimated : 0;
+
+        //Long0 :
+        // delta = (P_0^close - P_0^open) / P_0^open
+        //Long1 :
+        // delta = (P_1^close - P_1^open) / P_1^open
+        //       = ( 1/P_0^close) - 1/P_0^open) / (1 / P_0^open)
+        //       = (P_0^open - P_0^close) / P_0^close
+        
+        // long0 : 
+        //                      col = size * (openSqrt * openSqrt - liqSqrt * liqSqrt ) / (openSqrt * openSqrt) 
+        //               col / size = 1 - (liqSqrt / openSqrt)^2
+        //   (liqSqrt / openSqrt)^2 = (size - col) / size
+        //                  liqSqrt = (openSqrt^2 * (size - col) / size)^0.5
+        //                  liqSqrt = (1 - col / size)^0.5  * openSqrt
+        
+        // long1 : 
+        //                      col = size * (liqSqrt*liqSqrt - openSqrt*openSqrt) / liqSqrt*liqSqrt
+        //               col / size = 1 - (oS*oS) / (lS * lS)
+        //      (lS * lS) / (oS*oS) = size / ( size - col )
+        //                  liqSqrt = ( oS * oS * size / ( size - col ) )^0.5 
+
+    
 
         if (long0) {
             if (pRg > 1000000)
                 liqPriceSqrtX96 = 0;
             else{
-                liqPriceSqrtX96 = TradeMath.sqrt(
+                liqPriceSqrtX96 =  TradeMath.sqrt(
                     FullMath.mulDiv(
-                        entryPriceSqrt,
-                        entryPriceSqrt * (1000000 - pRg),
-                        1000000
-                    )
+                        FullMath.mulDiv(entryPriceSqrt , entryPriceSqrt, 10000000000),
+                        (size - collateral) * 10000000000,
+                        size)
                 );
             }
             // return (_entryPriceSqrt > slpPrice ? _entryPriceSqrt.sub(slpPrice) : 0, closePrice);
         } else {
-            liqPriceSqrtX96 = TradeMath.sqrt(
-                FullMath.mulDiv(
-                    entryPriceSqrt,
-                    entryPriceSqrt * (1000000 + pRg),
-                    1000000
-                )
-            );
-            // TradeMath.sqrt(_collateral.mul(100000000).div(_sizeDelta));
-            // return (_entryPriceSqrt.add(slpPrice), closePrice);
+                liqPriceSqrtX96 =  TradeMath.sqrt(
+                    FullMath.mulDiv(
+                        FullMath.mulDiv(entryPriceSqrt , entryPriceSqrt, 10000000000),
+                        size * 10000000000,
+                        (size - collateral) )
+                );
         }
     }
 
@@ -846,7 +885,7 @@ contract Reader {
         );
         resv = 1000000;
         if (zeroForOne){            
-            uint256 l1rec = IRoxSpotPool(spotPool).l1rec();
+            uint256 l1rec = IRoxSpotPool(spotPool).balance1();
             if (amount1 < 0) {
                 l1rec = l1rec.sub(uint256(-amount1));
             }
@@ -864,7 +903,7 @@ contract Reader {
             if (l1rec > 0)
                 resv = FullMath.mulDiv(IRoxPerpPool(IRoxSpotPool(spotPool).roxPerpPool()).reserve1(), 1000000, l1rec);
         }else{
-            uint256 l0rec = IRoxSpotPool(spotPool).l0rec();
+            uint256 l0rec = IRoxSpotPool(spotPool).balance0();
             if (amount0 < 0) {
                 l0rec = l0rec.sub(uint256(-amount0));
             }
@@ -887,153 +926,39 @@ contract Reader {
 
 
 
+    function centLiq(address _spotPool) external view returns (uint256 r0, uint256 r1) {
+        (uint160 sqrtPriceX96, int24 tick, , , , , ) = IRoxSpotPool(_spotPool).slot0();
+        uint128 liquidity = IRoxSpotPool(_spotPool).liquidity();
+
+        int256 curAmount = SqrtPriceMath.getAmount0Delta(
+                sqrtPriceX96,
+                TickMath.getSqrtRatioAtTick(TickRange.rightBoundaryTick(tick)),
+                int128(liquidity)
+            );
+        r0 = uint256(curAmount >= 0 ? curAmount : -curAmount);
 
 
+        curAmount = SqrtPriceMath.getAmount1Delta(
+                TickMath.getSqrtRatioAtTick(TickRange.leftBoundaryTickWithin(tick)),
+                sqrtPriceX96,
+                int128(liquidity));
 
-    // zeroForOne: -true for token0 to token1, false for token1 to token0
-    // get liq from: [tickFrom, tickTo]
-    function getLiq(
-        address spotPool,
-        int24 tickFrom,
-        int24 tickTo
-    ) public view returns (uint128) {
-        (, int24 curTick, , , , , ) = IRoxSpotPool(spotPool).slot0();
-        int24 tickSpacing = 600; // IRoxSpotPool(spotPool).tickSpacing();
-
-        uint128 liqTick = IRoxSpotPool(spotPool).liquidity();
-        uint128 liqAccumFrom;
-        uint128 liqAccumTo;
-        if (tickFrom > curTick) {
-            tickFrom = tickFrom - 1;
-            require(tickFrom < tickTo, "t=");
-            bool zeroForOne = false;
-            while (curTick <= tickTo) {
-                (
-                    int24 tickNext,
-                    bool nextInitialized
-                ) = roxUtils.nextInitializedTickWithinOneWord(
-                        spotPool,
-                        curTick,
-                        zeroForOne,
-                        tickSpacing
-                    );
-                if (tickNext < TickMath.MIN_TICK) {
-                    tickNext = TickMath.MIN_TICK;
-                } else if (tickNext > TickMath.MAX_TICK) {
-                    tickNext = TickMath.MAX_TICK;
-                }
-                require(tickNext >= curTick, "nVDir+");
-
-                if (curTick <= tickFrom) {
-                    liqAccumFrom =
-                        liqAccumFrom +
-                        uint128(
-                            (tickNext >= tickFrom ? tickFrom : tickNext) -
-                                curTick +
-                                1
-                        ) *
-                        liqTick;
-                }
-                if (curTick <= tickTo) {
-                    liqAccumTo =
-                        liqAccumTo +
-                        uint128(
-                            (tickNext >= tickTo ? tickTo : tickNext) -
-                                curTick +
-                                1
-                        ) *
-                        liqTick;
-                }
-                if (curTick == tickNext) {
-                    if (nextInitialized) {
-                        (, int128 liquidityNet, , , , ) = IRoxSpotPool(
-                            spotPool
-                        ).ticks(tickNext);
-                        liqTick = LiquidityMath.addDelta(liqTick, liquidityNet);
-                        liqAccumFrom = LiquidityMath.addDelta(
-                            liqAccumFrom,
-                            liquidityNet
-                        );
-                        liqAccumTo = LiquidityMath.addDelta(
-                            liqAccumTo,
-                            liquidityNet
-                        );
-                    }
-                    curTick = tickNext;
-                } else {
-                    curTick = tickNext;
-                }
-            }
-        } else if (tickFrom < curTick) {
-            tickFrom = tickFrom + 1;
-            require(tickFrom > tickTo, "t-=");
-            bool zeroForOne = true;
-            while (curTick <= tickTo) {
-                (
-                    int24 tickNext,
-                    bool nextInitialized
-                ) = roxUtils.nextInitializedTickWithinOneWord(
-                        spotPool,
-                        curTick,
-                        zeroForOne,
-                        tickSpacing
-                    );
-                if (tickNext < TickMath.MIN_TICK) {
-                    tickNext = TickMath.MIN_TICK;
-                } else if (tickNext > TickMath.MAX_TICK) {
-                    tickNext = TickMath.MAX_TICK;
-                }
-                require(curTick >= tickNext, "nVDir-");
-                if (curTick >= tickFrom) {
-                    liqAccumFrom =
-                        liqAccumFrom +
-                        uint128(
-                            curTick -
-                                (tickNext >= tickFrom ? tickNext : tickFrom) +
-                                1
-                        ) *
-                        liqTick;
-                }
-                if (curTick >= tickTo) {
-                    liqAccumTo =
-                        liqAccumTo +
-                        uint128(
-                            curTick -
-                                (tickNext >= tickTo ? tickNext : tickTo) +
-                                1
-                        ) *
-                        liqTick;
-                }
-
-                if (curTick == tickNext) {
-                    if (nextInitialized) {
-                        (, int128 liquidityNet, , , , ) = IRoxSpotPool(
-                            spotPool
-                        ).ticks(tickNext);
-                        // if (zeroForOne) liquidityNet = - liquidityNet;
-                        liqTick = LiquidityMath.addDelta(
-                            liqTick,
-                            -liquidityNet
-                        );
-                        liqAccumFrom = LiquidityMath.addDelta(
-                            liqAccumFrom,
-                            liquidityNet
-                        );
-                        liqAccumTo = LiquidityMath.addDelta(
-                            liqAccumTo,
-                            liquidityNet
-                        );
-                    }
-                    // curTick = zeroForOne ? tickNext - 1 : tickNext;
-                    curTick = tickNext - 1;
-                } else {
-                    curTick = tickNext;
-                }
-            }
-        } else {
-            revert("not suppoted.");
-        }
-        return liqAccumFrom < liqAccumTo ? liqAccumTo - liqAccumFrom : 0;
+        r1 = uint256(curAmount >= 0 ? curAmount : -curAmount); 
     }
 
+    function token0t1NoSpl(
+        address _spotPool,
+        uint256 _amount0
+    ) public view returns (uint256) {
+        (uint160 price, , , , , , ) = IRoxSpotPool(_spotPool).slot0();
+        return TradeMath.token0to1NoSpl(_amount0, uint256(price));
+    }
+
+    function token1t0NoSpl(
+        address _spotPool,
+        uint256 _amount1
+    ) public view returns (uint256) {
+        (uint160 price, , , , , , ) = IRoxSpotPool(_spotPool).slot0();
+        return TradeMath.token1to0NoSpl(_amount1, uint256(price));
+    }
 }

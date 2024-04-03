@@ -133,6 +133,8 @@ contract Minter {
     function calculate_growth(uint _minted) public view returns (uint) {
         uint _veTotal = _ve.totalSupply();
         uint _roxTotal = _rox.totalSupply();
+        if (_roxTotal < 1)
+            return 0;
         return (((_minted * _veTotal) / _roxTotal) * 3) / 2;
     }
 

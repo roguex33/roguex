@@ -3,10 +3,9 @@ pragma solidity =0.7.6;
 
 /// @title Provides functions for deriving a pool address from the factory, tokens, and the fee
 library PoolAddress {
-
-    bytes32 internal constant SPOT_POOL_INIT_CODE_HASH = 0xaaba347d274b9e7e2d195122c67b08b41f38d95a35b9eb67c46691cf10358366;//v0.7
-    bytes32 internal constant PERP_POOL_INIT_CODE_HASH = 0xfe75958c4585f6e53bb7f4cdc52b80113456129a4490d4b80dfd6968104b9c3e;//v0.7
-    bytes32 internal constant POSN_POOL_INIT_CODE_HASH = 0x0c4e166f9f335a3381e396fb85d30797c4fc1dc5746b2e637fa38b03c4f5c0ba;//v0.7
+    bytes32 internal constant SPOT_POOL_INIT_CODE_HASH = 0x7eb89ab17cc883d055f470bc0250135af3f951b6403ea74f651bcba0136f210b;
+    bytes32 internal constant PERP_POOL_INIT_CODE_HASH = 0x2c6f38c87e29af9884df7c0bee701b03461065fcd6924e6a5bad756581165700;
+    bytes32 internal constant POSN_POOL_INIT_CODE_HASH = 0x929563b02db566937df22aa2bd9765fdbb240913c7f41e5a7a331a75120e0b23;
 
     /// @notice The identifying key of the pool
     struct PoolKey {
@@ -34,7 +33,7 @@ library PoolAddress {
     /// @param key The PoolKey
     /// @return pool The contract address of the spot pool
     function computeAddress(address spotDeployer, PoolKey memory key) internal pure returns (address pool) {
-        require(key.token0 < key.token1, "k:0<1");
+        require(key.token0 < key.token1, "sk:0<1");
         pool = address(
             uint256(
                 keccak256(
@@ -50,7 +49,7 @@ library PoolAddress {
     }
 
     function perpAddress(address perpDeployer, PoolKey memory key) internal pure returns (address pool) {
-        require(key.token0 < key.token1, "k:0<1");
+        require(key.token0 < key.token1, "pk:0<1");
         pool = address(
             uint256(
                 keccak256(
@@ -66,7 +65,7 @@ library PoolAddress {
     }
 
     function posnAddress(address posnDeployer, PoolKey memory key) internal pure returns (address pool) {
-        require(key.token0 < key.token1, "k:0<1");
+        require(key.token0 < key.token1, "nk:0<1");
         pool = address(
             uint256(
                 keccak256(

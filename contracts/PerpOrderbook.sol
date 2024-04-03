@@ -12,6 +12,7 @@ import "./interfaces/IRoguexFactory.sol";
 import "./libraries/EnumerableValues.sol";
 import "./libraries/LowGasSafeMath.sol";
 import './interfaces/external/IWETH9.sol';
+import "./base/BlastBase.sol";
 
 
 library OrderData {
@@ -48,7 +49,7 @@ library OrderData {
     }
 }
 
-contract PerpOrderbook {
+contract PerpOrderbook is BlastBase {
     using LowGasSafeMath for uint256;
     // using Address for address payable;
     using EnumerableSet for EnumerableSet.UintSet;
@@ -78,7 +79,7 @@ contract PerpOrderbook {
     event ExecuteIncreaseOrder(OrderData.IncreaseOrder, uint256 executePrice);
 
     receive() external payable {
-        require(msg.sender == weth, "IS");
+        require(msg.sender == weth, "weth");
     }
 
     constructor(address _weth, address _factory) {

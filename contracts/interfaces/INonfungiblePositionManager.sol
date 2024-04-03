@@ -5,7 +5,6 @@ pragma abicoder v2;
 import '@openzeppelin/contracts/token/ERC721/IERC721Metadata.sol';
 import '@openzeppelin/contracts/token/ERC721/IERC721Enumerable.sol';
 
-import './IPoolInitializer.sol';
 import './IERC721Permit.sol';
 import './IPeripheryPayments.sol';
 import './IPeripheryImmutableState.sol';
@@ -15,12 +14,10 @@ import '../libraries/PoolAddress.sol';
 /// @notice Wraps rox positions in a non-fungible token interface which allows for them to be transferred
 /// and authorized.
 interface INonfungiblePositionManager is
-    IPoolInitializer,
     IPeripheryPayments,
     IPeripheryImmutableState,
     IERC721Metadata,
-    IERC721Enumerable,
-    IERC721Permit
+    IERC721Enumerable
 {
     /// @notice Emitted when liquidity is increased for a position NFT
     /// @dev Also emitted when a token is minted

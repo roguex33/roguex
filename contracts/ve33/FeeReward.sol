@@ -347,7 +347,11 @@ contract DisFeeReward {
     address public owner;
     address public team;
     address public treasury;
-
+    uint256 constant precision = 100;
+    uint256 public teamShare = 10;
+    uint256 public treasuryShare = 10;
+    uint256 public voterShare = 40;
+    uint256 public chefShare = 40;
     constructor(address _team, address _treasury, address _voter) {
         owner = msg.sender;
         team = _team;
@@ -356,12 +360,42 @@ contract DisFeeReward {
     }
 
     uint internal _unlocked = 1;
+    bool public flag;
 
     modifier lock() {
         require(_unlocked == 1);
         _unlocked = 2;
         _;
         _unlocked = 1;
+    }
+
+    function setParams(
+        address _team,
+        address _treasury,
+        address _voter
+    ) external onlyOwner {
+        team = _team;
+        treasury = _treasury;
+        voter = _voter;
+    }
+    function setShares(
+        uint256 _teamShare,
+        uint256 _treasuryShare,
+        uint256 _voterShare,
+        uint256 _chefShare
+    ) external onlyOwner {
+        teamShare = _teamShare;
+        treasuryShare = _treasuryShare;
+        voterShare = _voterShare;
+        chefShare = _chefShare;
+    }
+
+    function setFlag(bool _f) external onlyOwner {
+        flag = _f;
+    }
+
+    function withdrawToken(address _token, uint _amount) external onlyOwner {
+        IERC20(_token).transfer(owner, _amount);
     }
 
     function disFee(
@@ -376,16 +410,35 @@ contract DisFeeReward {
                 IERC20(token).transferFrom(msg.sender, address(this), amount),
                 "tranS"
             );
-            IERC20(token).approve(voter, amount.mul(4).div(10));
-            if (isToken0) {
-                IVoter(voter).notifyFeeAmount(pool, amount.mul(4).div(10), 0);
-            } else {
-                IVoter(voter).notifyFeeAmount(pool, 0, amount.mul(4).div(10));
+            if (flag) {
+                IERC20(token).approve(
+                    voter,
+                    amount.mul(voterShare).div(precision)
+                );
+                if (isToken0) {
+                    IVoter(voter).notifyFeeAmount(
+                        pool,
+                        amount.mul(voterShare).div(precision),
+                        0
+                    );
+                } else {
+                    IVoter(voter).notifyFeeAmount(
+                        pool,
+                        0,
+                        amount.mul(voterShare).div(precision)
+                    );
+                }
             }
-            IERC20(token).approve(chef, amount.mul(4).div(10));
-            IMasterChef(chef).notifyRewardAmount(token, amount.mul(4).div(10));
-            IERC20(token).transfer(team, amount.div(10));
-            IERC20(token).transfer(treasury, amount.div(10));
+            IERC20(token).approve(chef, amount.mul(chefShare).div(precision));
+            IMasterChef(chef).notifyRewardAmount(
+                token,
+                amount.mul(chefShare).div(precision)
+            );
+            IERC20(token).transfer(team, amount.mul(teamShare).div(precision));
+            IERC20(token).transfer(
+                treasury,
+                amount.mul(treasuryShare).div(precision)
+            );
         }
     }
 
