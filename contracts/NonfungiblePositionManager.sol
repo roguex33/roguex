@@ -2,6 +2,7 @@
 pragma solidity =0.7.6;
 pragma abicoder v2;
 
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./interfaces/IRoxSpotPool.sol";
 import "./libraries/FixedPoint128.sol";
 import "./libraries/FullMath.sol";
@@ -9,7 +10,6 @@ import "./interfaces/IRoguexFactory.sol";
 import "./interfaces/IRoxPerpPool.sol";
 import "./interfaces/INonfungiblePositionManager.sol";
 import "./interfaces/INonfungibleTokenPositionDescriptor.sol";
-// import "./libraries/PositionKey.sol";
 import "./libraries/PoolAddress.sol";
 import "./base/LiquidityManagement.sol";
 import "./base/PeripheryImmutableState.sol";
@@ -22,7 +22,8 @@ import "./interfaces/IRoxUtils.sol";
 import "./base/BlastBase.sol";
 
 /// @title NFT positions
-/// @notice Wraps Liquidity Positions in the ERC721 non-fungible token interface
+/// @notice Wraps Liquidity Positions in the ERC721 non-fungible token interface    // ,
+
 contract NonfungiblePositionManager is
     INonfungiblePositionManager,
     Multicall,
@@ -30,7 +31,8 @@ contract NonfungiblePositionManager is
     PeripheryImmutableState,
     LiquidityManagement,
     PeripheryValidation,
-    SelfPermit
+    SelfPermit,
+    ReentrancyGuard
     {
     // details about the liquidity position
     struct Position {
@@ -115,6 +117,9 @@ contract NonfungiblePositionManager is
             _dPos.perpFeeOwed1,
             _dPos.tokenOwe0,
             _dPos.tokenOwe1) = IRoxPosnPool(roxPos).positions(_key);
+            
+        _dPos.lockTime = IRoxPosnPool(roxPos).lpLocktime(_key);
+
     }
 
     /// @dev Caches a pool key
@@ -187,27 +192,34 @@ contract NonfungiblePositionManager is
                 params.tickUpper,
                 address(pool)
             );
-        require(keyId[_nftkey] < 1, "already minted.");
+        // require(keyId[_nftkey] < 1, "already minted.");
 
-        _mint(account, (tokenId = _nextId++));
-        keyId[_nftkey] = tokenId;
-        // idempotent set
-        mCache.poolId = cachePoolKey(
-            address(pool),
-            PoolAddress.PoolKey({
-                token0: params.token0,
-                token1: params.token1,
-                fee: params.fee
-            })
-        );
+        // require(_exists(tokenId), "ERC721: operator query for nonexistent token");
+        // address owner = ERC721.ownerOf(tokenId);
+        // return (spender == owner || getApproved(tokenId) == spender || ERC721.isApprovedForAll(owner, spender));
+        
+        tokenId = keyId[_nftkey];
+        if (tokenId < 1){
+            _mint(account, (tokenId = _nextId++));
+            keyId[_nftkey] = tokenId;
+            // idempotent set
+            mCache.poolId = cachePoolKey(
+                address(pool),
+                PoolAddress.PoolKey({
+                    token0: params.token0,
+                    token1: params.token1,
+                    fee: params.fee
+                })
+            );
 
-        _positions[tokenId] = Position({
-            owner: account,
-            poolId: mCache.poolId,
-            tickLower: params.tickLower,
-            tickUpper: params.tickUpper
-        });
-
+            _positions[tokenId] = Position({
+                owner: account,
+                poolId: mCache.poolId,
+                tickLower: params.tickLower,
+                tickUpper: params.tickUpper
+            });
+        }
+        
         emit IncreaseLiquidity(tokenId, liquidity, amount0, amount1);
     }
 
@@ -286,6 +298,7 @@ contract NonfungiblePositionManager is
         external
         payable
         override
+        nonReentrant
         isAuthorizedForToken(params.tokenId)
         checkDeadline(params.deadline)
         returns (uint128 liquidity, uint256 amount0, uint256 amount1)
@@ -320,6 +333,7 @@ contract NonfungiblePositionManager is
         external
         payable
         override
+        nonReentrant
         isAuthorizedForToken(params.tokenId)
         checkDeadline(params.deadline)
         returns (uint256 amount0, uint256 amount1)
@@ -358,14 +372,13 @@ contract NonfungiblePositionManager is
         );
     }
 
-    /// @inheritdoc INonfungiblePositionManager
-    function collect(
-        CollectParams calldata params
+
+
+    function _collect(
+        CollectParams calldata params,
+        bool toETH
     )
-        external
-        payable
-        override
-        isAuthorizedForToken(params.tokenId)
+        private
         returns (uint256 amount0, uint256 amount1)
     {
         require(params.amount0Max > 0 || params.amount1Max > 0);
@@ -399,14 +412,53 @@ contract NonfungiblePositionManager is
             params.amount1Max
         );
 
+        if (toETH && poolKey.token0 == WETH9){
+            IWETH9(WETH9).withdraw(amount0);
+            TransferHelper.safeTransferETH(recipient, amount0);
+        }else{
+            TransferHelper.safeTransfer(poolKey.token0, recipient, amount0);
+        }
+        
+        if (toETH && poolKey.token1 == WETH9){
+            IWETH9(WETH9).withdraw(amount1);
+            TransferHelper.safeTransferETH(recipient, amount1);
+        }else{
+            TransferHelper.safeTransfer(poolKey.token1, recipient, amount1);
+        }     
 
         emit Collect(params.tokenId, recipient, amount0, amount1);
+    }
+
+
+    function collect(
+        CollectParams calldata params
+    )
+        external
+        payable
+        override
+        nonReentrant
+        isAuthorizedForToken(params.tokenId)
+        returns (uint256 amount0, uint256 amount1)
+    {
+        return _collect(params, false);
+    }
+
+    function collectETH(
+        CollectParams calldata params
+    )
+        external
+        payable
+        nonReentrant
+        isAuthorizedForToken(params.tokenId)
+        returns (uint256 amount0, uint256 amount1)
+    {
+        return _collect(params, true);
     }
 
     /// @inheritdoc INonfungiblePositionManager
     function burn(
         uint256 tokenId
-    ) external payable override isAuthorizedForToken(tokenId) {
+    ) external payable override nonReentrant isAuthorizedForToken(tokenId) {
         Position memory position = _positions[tokenId];
         require(position.poolId != 0, "Invalid token ID");
         PoolAddress.PoolKey memory poolKey = _poolIdToPoolKey[position.poolId];

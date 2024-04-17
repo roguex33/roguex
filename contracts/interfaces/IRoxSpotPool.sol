@@ -63,9 +63,9 @@ interface IRoxSpotPool is
         address recipient
     ) external;
 
-    function getTwapTickUnsafe(uint32 _sec) external view returns (int24 tick);
+    // function getTwapTickUnsafe(uint32 _sec) external view returns (int24 tick);
 
-    function availableReserve(
-        bool _l0, bool _l1
-        ) external view returns (uint256 r0, uint256 r1);
+    // function availableReserve(
+    //     bool _l0, bool _l1
+    //     ) external view returns (uint256 r0, uint256 r1);
 }

@@ -2,8 +2,8 @@
 pragma solidity ^0.7.0;
 pragma abicoder v2;
 
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "./libraries/TransferHelper.sol";
 import "@openzeppelin/contracts/utils/EnumerableSet.sol";
 import "./interfaces/IRoxPerpPool.sol";
 import "./interfaces/IRoxUtils.sol";
@@ -11,6 +11,7 @@ import "./interfaces/IPerpRouter.sol";
 import "./interfaces/IRoguexFactory.sol";
 import "./libraries/EnumerableValues.sol";
 import "./libraries/LowGasSafeMath.sol";
+import "./libraries/TransferHelper.sol";
 import './interfaces/external/IWETH9.sol';
 import "./base/BlastBase.sol";
 
@@ -49,7 +50,7 @@ library OrderData {
     }
 }
 
-contract PerpOrderbook is BlastBase {
+contract PerpOrderbook is BlastBase, ReentrancyGuard {
     using LowGasSafeMath for uint256;
     // using Address for address payable;
     using EnumerableSet for EnumerableSet.UintSet;
@@ -201,7 +202,7 @@ contract PerpOrderbook is BlastBase {
         bool _long0,
         bool _triggerAboveThreshold,
         bool _shouldWarp
-    ) external payable {
+    ) external payable nonReentrant{
         require(_tokenAmount > _exeFee, "Fee>Col");
         address _account = msg.sender;
         address token0 = IRoxPerpPool(_perpPool).token0();
@@ -240,7 +241,7 @@ contract PerpOrderbook is BlastBase {
         emit CreateIncreaseOrder(increaseOrders[_orderIndex]);
     }
 
-    function executeIncreaseOrder(uint256 _key, address _feeReceipt) external {
+    function executeIncreaseOrder(uint256 _key, address _feeReceipt) external nonReentrant{
         OrderData.IncreaseOrder memory order = increaseOrders[_key];
         require(
             isIncreaseOrderKeyAlive(_key) && order.account != address(0),
@@ -282,10 +283,12 @@ contract PerpOrderbook is BlastBase {
         // delete increaseOrderKeys[msg.sender][order.index];
     }
 
-    function cancelIncreaseOrder(uint256 _orderIndex) public {
+    function cancelIncreaseOrder(uint256 _orderIndex) public nonReentrant{
         OrderData.IncreaseOrder memory order = increaseOrders[_orderIndex];
         require(isIncreaseOrderKeyAlive(_orderIndex), "no-order");
         require(order.account == msg.sender, "OnlyOwner");
+        increaseOrderKeysAlive[order.account].remove(_orderIndex);
+        increaseOrderKeysAlive[address(0)].remove(_orderIndex);
 
         address _colToken = order.long0
             ? IRoxPerpPool(order.perpPool).token0()
@@ -303,8 +306,7 @@ contract PerpOrderbook is BlastBase {
         }
 
         emit CancelIncreaseOrder(order);
-        increaseOrderKeysAlive[order.account].remove(_orderIndex);
-        increaseOrderKeysAlive[address(0)].remove(_orderIndex);
+
         delete increaseOrders[_orderIndex];
     }
 
@@ -315,7 +317,7 @@ contract PerpOrderbook is BlastBase {
         int256 _feeDelta,
         uint160 _triggerPrice,
         bool _triggerAboveThreshold
-    ) public payable {
+    ) public payable nonReentrant{
         require(isIncreaseOrderKeyAlive(_key), "no key");
         OrderData.IncreaseOrder memory order = increaseOrders[_key];
         require(msg.sender == order.account, "Forbiden");
@@ -385,7 +387,7 @@ contract PerpOrderbook is BlastBase {
         bool _long0,
         bool _triggerAboveThreshold,
         bool _shouldWarp
-    ) external payable {
+    ) external payable nonReentrant{
         address _account = msg.sender;
         address token0 = IRoxPerpPool(_perpPool).token0();
         address token1 = IRoxPerpPool(_perpPool).token1();
@@ -425,11 +427,13 @@ contract PerpOrderbook is BlastBase {
         emit CreateDecreaseOrder(decreaseOrders[_orderIndex]);
     }
 
-    function cancelDecreaseOrder(uint256 _orderIndex) public {
+    function cancelDecreaseOrder(uint256 _orderIndex) public nonReentrant {
         OrderData.DecreaseOrder memory order = decreaseOrders[_orderIndex];
         require(isDecreaseOrderKeyAlive(_orderIndex), "no-order");
         require(order.account == msg.sender, "OnlyOwner");
-
+        decreaseOrderKeysAlive[order.account].remove(_orderIndex);
+        decreaseOrderKeysAlive[address(0)].remove(_orderIndex);
+        
         address _colToken = order.long0
             ? IRoxPerpPool(order.perpPool).token0()
             : IRoxPerpPool(order.perpPool).token1();
@@ -442,12 +446,10 @@ contract PerpOrderbook is BlastBase {
         }
 
         emit CancelDecreaseOrder(order);
-        decreaseOrderKeysAlive[order.account].remove(_orderIndex);
-        decreaseOrderKeysAlive[address(0)].remove(_orderIndex);
         delete decreaseOrders[_orderIndex];
     }
 
-    function executeDecreaseOrder(uint256 _key, address _feeReceipt) external {
+    function executeDecreaseOrder(uint256 _key, address _feeReceipt) external nonReentrant {
         OrderData.DecreaseOrder memory order = decreaseOrders[_key];
         require(
             isDecreaseOrderKeyAlive(_key) && order.account != address(0),
@@ -490,7 +492,7 @@ contract PerpOrderbook is BlastBase {
         int256 _feeDelta,
         uint160 _triggerPrice,
         bool _triggerAboveThreshold
-    ) public payable {
+    ) public payable nonReentrant{
         require(isDecreaseOrderKeyAlive(_key), "no key");
         OrderData.DecreaseOrder memory order = decreaseOrders[_key];
         require(msg.sender == order.account, "Forbiden");

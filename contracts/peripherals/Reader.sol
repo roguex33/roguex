@@ -91,7 +91,9 @@ contract Reader {
     }
 
     function poolReserveRate(address _spotPool) public view returns (uint256 rate0, uint256 rate1){
-        (uint256 r0, uint256 r1) = IRoxSpotPool(_spotPool).availableReserve(true, true);
+        // (uint256 r0, uint256 r1) = IRoxSpotPool(_spotPool).availableReserve(true, true);
+        (uint256 r0, uint256 r1) = roxUtils.availableReserve(_spotPool, true, true);
+
         uint256 l0rec = IRoxSpotPool(_spotPool).balance0();
         uint256 l1rec = IRoxSpotPool(_spotPool).balance1();
         IRoxPerpPool perpPool = IRoxPerpPool(IRoxSpotPool(_spotPool).roxPerpPool());
@@ -739,10 +741,16 @@ contract Reader {
         address _spotPool,
         address _tradePool
     ) private view returns (uint256, uint256) {
-        (uint256 b0, uint256 b1) = IRoxSpotPool(_spotPool).availableReserve(
+        // (uint256 b0, uint256 b1) = IRoxSpotPool(_spotPool).availableReserve(
+        //     true,
+        //     true
+        // );
+        (uint256 b0, uint256 b1) = roxUtils.availableReserve(_spotPool,
             true,
             true
         );
+
+
         b0 = b0 / 2;
         b1 = b1 / 2;
         uint256 r0 = IRoxPerpPool(_tradePool).reserve0();

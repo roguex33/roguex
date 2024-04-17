@@ -3,6 +3,7 @@ pragma solidity ^0.7.0;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/utils/EnumerableSet.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./interfaces/IRoxSpotPool.sol";
 import "./interfaces/IERC20Minimal.sol";
 import "./interfaces/IRoxPerpPool.sol";
@@ -17,6 +18,7 @@ import "./libraries/TradeMath.sol";
 import "./interfaces/IRoxUtils.sol";
 import "./interfaces/ISwapMining.sol";
 import "./base/BlastBase.sol";
+import "./base/Multicall.sol";
 
 
 library DispData {
@@ -72,7 +74,7 @@ library DispData {
     }
 }
 
-contract PerpRouter is IPerpRouter, BlastBase {
+contract PerpRouter is IPerpRouter, BlastBase, Multicall, ReentrancyGuard {
     using LowGasSafeMath for uint256;
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using EnumerableValues for EnumerableSet.Bytes32Set;
@@ -95,12 +97,12 @@ contract PerpRouter is IPerpRouter, BlastBase {
         weth = _weth;
     }
 
-    function setSwapMining(address addr) public {//TEST ONLY
+    function setSwapMining(address addr) public {
         require(msg.sender == IRoguexFactory(factory).owner(), "ow");
         swapMining = addr;
     }
 
-    function setUtils(address _roguUtils, address _perpOrderbook) external { //TEST ONLY
+    function setUtils(address _roguUtils, address _perpOrderbook) external {
         require(msg.sender == IRoguexFactory(factory).owner(), "ow");
         roxUtils = _roguUtils;
         perpOrderbook = _perpOrderbook;
@@ -113,7 +115,7 @@ contract PerpRouter is IPerpRouter, BlastBase {
         uint256 _sizeDelta,
         bool _long0,
         uint160 _sqrtPriceX96
-    ) external payable{
+    ) external payable nonReentrant{
         require(_tokenAmount > 0, "z0i");
         address _account = _sender();
 
@@ -147,7 +149,7 @@ contract PerpRouter is IPerpRouter, BlastBase {
         uint256 _sizeDelta,
         bool _long0,
         uint160 _sqrtPriceX96
-    ) external override {
+    ) external override nonReentrant{
         require(_tokenAmount > 0, "z0i");
         require (_account != address(0), "zero acc");
 
@@ -197,7 +199,7 @@ contract PerpRouter is IPerpRouter, BlastBase {
     function liquidatePosition(
         address _perpPool,
         bytes32 _key
-    ) external {
+    ) external nonReentrant{
         require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "npp");
         (bool _del, bool _isLiq, uint256 decDelta, address _account, ) = IRoxPerpPool(_perpPool).decreasePosition(
             _key,
@@ -230,7 +232,7 @@ contract PerpRouter is IPerpRouter, BlastBase {
         bool _long0,
         bool _toETH,
         uint160 _sqrtPriceX96
-    ) external override {
+    ) external override nonReentrant{
         require(IRoguexFactory(factory).approvedPerpPool(_perpPool), "npp");
         if (_account == address(0))
             _account = _sender();
@@ -273,10 +275,12 @@ contract PerpRouter is IPerpRouter, BlastBase {
         uint256 setlThres = IRoxUtils(roxUtils).setlThres(spotPool);
         TradeData.TradePosition memory _pos = IRoxPerpPool(_perpPool).getPositionByKey(_posKey);
         if (_pos.long0){
-            (uint256 r0,  ) = IRoxSpotPool(spotPool).availableReserve(true, false);
+            // (uint256 r0,  ) = IRoxSpotPool(spotPool).availableReserve(true, false);
+            (uint256 r0,  ) = IRoxUtils(roxUtils).availableReserve(spotPool, true, false);
             require(IRoxPerpPool(_perpPool).reserve0() > r0.mul(setlThres) / (1000), "np0");
         }else{
-            ( , uint256 r1) = IRoxSpotPool(spotPool).availableReserve(false, true);
+            // ( , uint256 r1) = IRoxSpotPool(spotPool).availableReserve(false, true);
+            ( , uint256 r1) = IRoxUtils(roxUtils).availableReserve(spotPool, false, true);
             require(IRoxPerpPool(_perpPool).reserve1() > r1.mul(setlThres) / (1000), "np1");
         }
         require(_pos.entryPos == IRoxPerpPool(_perpPool).tPid(_pos.long0), "nps");
@@ -301,6 +305,36 @@ contract PerpRouter is IPerpRouter, BlastBase {
 
     function _sender() private view returns (address) {
         return msg.sender;
+    }
+
+
+    function unwrapWETH9(uint256 amountMinimum, address recipient) public payable {
+        require(msg.sender == IRoguexFactory(factory).owner(), "ow");
+        uint256 balanceWETH9 = IWETH9(weth).balanceOf(address(this));
+        require(balanceWETH9 >= amountMinimum, 'Insufficient WETH9');
+        if (balanceWETH9 > 0) {
+            IWETH9(weth).withdraw(balanceWETH9);
+            TransferHelper.safeTransferETH(recipient, balanceWETH9);
+        }
+    }
+
+    function sweepToken(
+        address token,
+        uint256 amountMinimum,
+        address recipient
+    ) public payable {
+        require(msg.sender == IRoguexFactory(factory).owner(), "ow");
+        uint256 balanceToken = IERC20(token).balanceOf(address(this));
+        require(balanceToken >= amountMinimum, 'Insufficient token');
+
+        if (balanceToken > 0) {
+            TransferHelper.safeTransfer(token, recipient, balanceToken);
+        }
+    }
+
+    function refundETH() external payable {
+        require(msg.sender == IRoguexFactory(factory).owner(), "ow");
+        if (address(this).balance > 0) TransferHelper.safeTransferETH(msg.sender, address(this).balance);
     }
 
 }

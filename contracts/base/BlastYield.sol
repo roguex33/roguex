@@ -56,6 +56,10 @@ interface IBlast{
     function readGasParams(address contractAddress) external view returns (uint256 etherSeconds, uint256 etherBalance, uint256 lastUpdated, GasMode);
 }
 
+interface IYContract{
+    function claimGas(address _recipient) external;
+    function claimYieldAll(address _recipient, uint256 _amountWETH, uint256 _amountUSDB) external;
+}
 
 contract BlastYield is Ownable{
     
@@ -120,6 +124,34 @@ contract BlastYield is Ownable{
     function configureGovernorOnBehalf(address _newGovernor, address contractAddress)external onlyHandler{
         IBlast(blast).configureGovernorOnBehalf(_newGovernor, contractAddress);
     }
+
+    function claimGas(address _contract, address _recipient) external onlyHandler{
+        IYContract(_contract).claimGas(_recipient);
+
+    }
+
+    function claimYieldAll(address _contract, address _recipient, uint256 _amountWETH, uint256 _amountUSDB)
+        external onlyHandler
+    {
+        IYContract(_contract).claimYieldAll(_recipient, _amountWETH, _amountUSDB);
+    }
+
+    event CallResult(bool success, bytes data);
+
+    function executeCall(address target, bytes calldata data)
+        onlyOwner
+        external
+        payable
+        returns (bool success, bytes memory returnData)
+    {
+        (success, returnData) = target.call{value: msg.value}(data);
+        emit CallResult(success, returnData);
+        require(success, "Call failed");
+    }
+    fallback() external payable { }
+    
+    receive() external payable { }
+
 
     function multicall(bytes[] calldata data) public payable onlyOwner returns (bytes[] memory results) {
         results = new bytes[](data.length);

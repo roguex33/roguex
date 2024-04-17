@@ -62,6 +62,7 @@ interface INonfungiblePositionManager is
         uint128 spotFeeOwed1;
         uint128 perpFeeOwed0;
         uint128 perpFeeOwed1;
+        uint256 lockTime;
     }
 
 

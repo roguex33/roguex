@@ -3,9 +3,9 @@ pragma solidity =0.7.6;
 
 /// @title Provides functions for deriving a pool address from the factory, tokens, and the fee
 library PoolAddress {
-    bytes32 internal constant SPOT_POOL_INIT_CODE_HASH = 0x7eb89ab17cc883d055f470bc0250135af3f951b6403ea74f651bcba0136f210b;
-    bytes32 internal constant PERP_POOL_INIT_CODE_HASH = 0x2c6f38c87e29af9884df7c0bee701b03461065fcd6924e6a5bad756581165700;
-    bytes32 internal constant POSN_POOL_INIT_CODE_HASH = 0x929563b02db566937df22aa2bd9765fdbb240913c7f41e5a7a331a75120e0b23;
+    bytes32 internal constant SPOT_POOL_INIT_CODE_HASH = 0xb8085d94e88a9b054bb545f3a69d61c3dbf6c60c341af610ad0f198db6db098b;
+    bytes32 internal constant PERP_POOL_INIT_CODE_HASH = 0x746e6db393fe909ce67051aa106b366aa8a9cf9a47827f32171459d77ed493c0;
+    bytes32 internal constant POSN_POOL_INIT_CODE_HASH = 0xa70c68e041fff3ce46e1917a40bd428415df131c0ad5a4959fc7ba54daf8b526;
 
     /// @notice The identifying key of the pool
     struct PoolKey {

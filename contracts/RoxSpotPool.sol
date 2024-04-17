@@ -35,7 +35,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
     using SafeCast for int256;
     using Tick for mapping(int24 => Tick.Info);
     using TickBitmap for mapping(int16 => uint256);
-    using Oracle for Oracle.Observation[65535];
+    // using Oracle for Oracle.Observation[65535];
 
     /// @inheritdoc IRoxSpotPoolImmutables
     address public immutable override factory;
@@ -79,8 +79,8 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
     /// @inheritdoc IRoxSpotPoolState
     mapping(int16 => uint256) public override tickBitmap;
 
-    /// @inheritdoc IRoxSpotPoolState
-    Oracle.Observation[65535] public override observations;
+    /// inheritdoc IRoxSpotPoolState
+    // Oracle.Observation[65535] public override observations;
 
     address public immutable override roxPerpPool;
     address public immutable override roxPosnPool;
@@ -157,15 +157,22 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
             uint160[] memory secondsPerLiquidityCumulativeX128s
         )
     {
-        return
-            observations.observe(
-                _blockTimestamp(),
+        return IRoxPosnPool(roxPosnPool).observe(
+                // _blockTimestamp(),
                 secondsAgos,
                 slot0.tick,
                 slot0.observationIndex,
                 liquidity,
                 slot0.observationCardinality
             );
+            // observations.observe(
+            //     _blockTimestamp(),
+            //     secondsAgos,
+            //     slot0.tick,
+            //     slot0.observationIndex,
+            //     liquidity,
+            //     slot0.observationCardinality
+            // );
     }
 
     // /// @inheritdoc IRoxSpotPoolActions
@@ -192,9 +199,10 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
 
         int24 tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
 
-        (uint16 cardinality, uint16 cardinalityNext) = observations.initialize(
-            _blockTimestamp()
-        );
+        // (uint16 cardinality, uint16 cardinalityNext) = observations.initialize(
+        //     _blockTimestamp()
+        // );
+        (uint16 cardinality, uint16 cardinalityNext) = IRoxPosnPool(roxPosnPool).initializeObserve();
 
         slot0 = Slot0({
             sqrtPriceX96: sqrtPriceX96,
@@ -312,14 +320,26 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
         (
             int56 tickCumulative,
             uint160 secondsPerLiquidityCumulativeX128
-        ) = observations.observeSingle(
+        ) = IRoxPosnPool(roxPosnPool).observeSingle(
                 time,
-                0,
+                // 0,
                 slot0.tick,
                 slot0.observationIndex,
                 liquidity,
                 slot0.observationCardinality
             );
+
+        // (
+        //     int56 tickCumulative,
+        //     uint160 secondsPerLiquidityCumulativeX128
+        // ) = observations.observeSingle(
+        //         time,
+        //         0,
+        //         slot0.tick,
+        //         slot0.observationIndex,
+        //         liquidity,
+        //         slot0.observationCardinality
+        //     );
 
         flippedLower = ticks.update(
             tickLower,
@@ -441,8 +461,14 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
         uint128 amount1Requested
     ) external override lock returns (uint128 amount0, uint128 amount1) {
         address owner = recipient;
-        if (!IRoguexFactory(factory).approvedNftRouters(msg.sender))
-            owner = msg.sender;
+        if (!IRoguexFactory(factory).approvedNftRouters(msg.sender)){
+            owner = msg.sender;     
+            recipient = msg.sender;
+        }
+        else{//sender is NFTRouter
+            owner = recipient;
+            recipient = msg.sender; //token back to nft router
+        }
         return _collect(owner, recipient, tickLower, tickUpper, amount0Requested, amount1Requested);
     }
 
@@ -539,6 +565,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
     )
         external
         override
+        lock
         onlyPerpPool
     {
         if (amount < 1) return;
@@ -680,14 +707,25 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
                         (
                             cache.tickCumulative,
                             cache.secondsPerLiquidityCumulativeX128
-                        ) = observations.observeSingle(
+                        ) = IRoxPosnPool(roxPosnPool).observeSingle(
                             cache.blockTimestamp,
-                            0,
+                            // 0,
                             slot0Start.tick,
                             slot0Start.observationIndex,
                             cache.liquidityStart,
                             slot0Start.observationCardinality
                         );
+                        // (
+                        //     cache.tickCumulative,
+                        //     cache.secondsPerLiquidityCumulativeX128
+                        // ) = observations.observeSingle(
+                        //     cache.blockTimestamp,
+                        //     0,
+                        //     slot0Start.tick,
+                        //     slot0Start.observationIndex,
+                        //     cache.liquidityStart,
+                        //     slot0Start.observationCardinality
+                        // );
                         cache.computedLatestObservation = true;
                     }
                     
@@ -724,7 +762,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
             (
                 uint16 observationIndex,
                 uint16 observationCardinality
-            ) = observations.write(
+            ) = IRoxPosnPool(roxPosnPool).writeObserve(
                     slot0Start.observationIndex,
                     cache.blockTimestamp,
                     slot0Start.tick,
@@ -732,6 +770,17 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
                     slot0Start.observationCardinality,
                     slot0Start.observationCardinalityNext
                 );
+            // (
+            //     uint16 observationIndex,
+            //     uint16 observationCardinality
+            // ) = observations.write(
+            //         slot0Start.observationIndex,
+            //         cache.blockTimestamp,
+            //         slot0Start.tick,
+            //         cache.liquidityStart,
+            //         slot0Start.observationCardinality,
+            //         slot0Start.observationCardinalityNext
+            //     );
             (
                 slot0.sqrtPriceX96,
                 slot0.tick,
@@ -776,7 +825,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
                         uint256(-amount1)
                     );
 
-                (, uint256 r1) = availableReserve(false, true);
+                (, uint256 r1) = IRoxUtils(roxUtils).availableReserve(address(this), false, true);
                 require(r1 * spotThres  >= IRoxPerpPool(roxPerpPool).reserve1() * 1000, "z0");
                 uint256 balance0Before = balance0();
                 ISwapCallback(msg.sender).swapCallback(
@@ -797,7 +846,7 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
                     recipient,
                     uint256(-amount0)
                 );
-                (uint256 r0, ) = availableReserve(true, false);
+                (uint256 r0, ) = IRoxUtils(roxUtils).availableReserve(address(this), true, false);
                 require(r0  * spotThres >= IRoxPerpPool(roxPerpPool).reserve0() * 1000, "z1");
                 uint256 balance1Before = balance1();
                 ISwapCallback(msg.sender).swapCallback(
@@ -823,21 +872,21 @@ contract RoxSpotPool is IRoxSpotPool, NoDelegateCall, BlastBase {
         slot0.unlocked = true;
     }
 
-    function availableReserve(
-        bool _l0, bool _l1
-        ) public view override returns (uint256 r0, uint256 r1){
-            return IRoxUtils(roxUtils).availableReserve(address(this), _l0, _l1);
-    }
+    // function availableReserve(
+    //     bool _l0, bool _l1
+    //     ) public view override returns (uint256 r0, uint256 r1){
+    //         return IRoxUtils(roxUtils).availableReserve(address(this), _l0, _l1);
+    // }
 
     function liqdCheck( ) public view returns (bool){
         uint256 liqdThres = IRoxUtils(roxUtils).spotThres(address(this));
-        (uint256 r0, uint256 r1) = availableReserve(true, true);
+        (uint256 r0, uint256 r1) = IRoxUtils(roxUtils).availableReserve(address(this), true, true);
         require(r1 * liqdThres>= IRoxPerpPool(roxPerpPool).reserve1() * 1000, "bn0");
         require(r0 * liqdThres>= IRoxPerpPool(roxPerpPool).reserve0() * 1000, "bn1");
         return true;
     }
     
-    function getTwapTickUnsafe(uint32 _sec) public view override returns (int24 tick) {   
-        return IRoxUtils(roxUtils).getTwapTickUnsafe(address(this), _sec);
-    }
+    // function getTwapTickUnsafe(uint32 _sec) public view override returns (int24 tick) {   
+    //     return IRoxUtils(roxUtils).getTwapTickUnsafe(address(this), _sec);
+    // }
 }

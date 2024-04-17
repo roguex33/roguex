@@ -46,13 +46,6 @@ interface IRoxPosnPool {
         uint256 feeDelta,
         bool long0) external;
 
-
-
-
-
-
-
-
     function positions(bytes32 key)
         external
         view
@@ -76,15 +69,8 @@ interface IRoxPosnPool {
             uint128 tokensOwed0,
             uint128 tokensOwed1
         );
-    // function updatePosition(
-    //     RoxPosition.Position memory position,
-    //     address roxPerpPool,
-    //     int128 liquidityDelta,
-    //     uint160 curSqrtPrice,
-    //     int24 tickCur
-    // ) external returns (RoxPosition.Position memory, uint256 amount0, uint256 amount1);
 
- function estimateDecreaseLiquidity(
+    function estimateDecreaseLiquidity(
         bytes32 _key,
         uint128 liquidityDelta,
         int24 tick,
@@ -131,11 +117,43 @@ interface IRoxPosnPool {
         uint128 _amount1Requested
         ) external  returns (uint128 amount0, uint128 amount1);
 
+    //- Observe
+    function observe(
+        uint32[] calldata secondsAgos,
+        int24 tick,
+        uint16 observationIndex,
+        uint128 liquidity,
+        uint16 observationCardinality
+    )
+        external
+        view
+        returns (
+            int56[] memory tickCumulatives,
+            uint160[] memory secondsPerLiquidityCumulativeX128s
+        );
 
-//    function updatePosition(
-//         address owner,
-//         int24 tickLower,
-//         int24 tickUpper,
-//         int128 liquidityDelta
-//     ) external returns (uint256 amount0, uint256 amount1);
+    function initializeObserve( ) external returns (uint16 cardinality, uint16 cardinalityNext);
+    function lpLocktime(bytes32 key) external view returns (uint256 lockTime);
+    function writeObserve(
+        uint16 startObservationIndex,
+        uint32 blockTimestamp,
+        int24 tick,
+        uint128 liquidity,
+        uint16 startObservationCardinality,
+        uint16 observationCardinalityNext
+     ) external returns (uint16 observationIndex,uint16 observationCardinality);
+
+    function observeSingle(
+            uint32 time,
+            int24 tick,
+            uint16 observationIndex,
+            uint128 liquidity,
+            uint16 observationCardinality
+        ) external view returns (int56 tickCumulative,
+            uint160 secondsPerLiquidityCumulativeX128
+        );
+
+
+
+
 }

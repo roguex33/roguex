@@ -13,19 +13,28 @@ import "./libraries/SafeCast.sol";
 import "./libraries/Tick.sol";
 import "./libraries/FullMath.sol";
 import './libraries/PriceRange.sol';
+import "./libraries/Oracle.sol";
+import "./NoDelegateCall.sol";
 
-contract RoxPosnPool is IRoxPosnPool {
+
+
+contract RoxPosnPool is IRoxPosnPool, NoDelegateCall {
     using LowGasSafeMath for uint256;
     using SafeCast for uint256;
     using SafeCast for int256;
     using PriceRange for uint256[370];
     using PriceRange for mapping(uint256 => PriceRange.FeeInfo);
+    using Oracle for Oracle.Observation[65535];
+
+    Oracle.Observation[65535] public observations;//o
+
 
     // price = realLiq / supLiq 
     // position realLiq = entrySupLiq * latestPrice
     //                  = entryRealLiq / entryPrice * latestPrice
     // supLiq = realLiq / price
     mapping(bytes32 => RoxPosition.Position) public roxPositions;
+    mapping(bytes32 => uint256) public override lpLocktime;
 
     // Price related.
     // Price Range:
@@ -51,6 +60,8 @@ contract RoxPosnPool is IRoxPosnPool {
     // uint256 public spot1fee;
     // uint256 public perp0fee;
     // uint256 public perp1fee;
+    event BurnLp(address owner, uint256 liquidity, uint256 liquidityDelta);
+    event LockLp(address owner, uint256 lockTime);
 
     modifier onlySpotPool() {
         require(msg.sender == spotPool, "os");
@@ -199,6 +210,46 @@ contract RoxPosnPool is IRoxPosnPool {
             );
     }
 
+    function burnLp(
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidityDelta
+    ) public {
+        address owner = msg.sender;
+        bytes32 _key = PositionKey.compute(
+                        owner,
+                        tickLower,
+                        tickUpper
+                    );
+        // RoxPosition.Position memory position = self[_key];
+
+        RoxPosition.Position storage position = roxPositions[_key];
+        require(position.liquidity >= liquidityDelta, "bol");
+        emit BurnLp(owner, position.liquidity, liquidityDelta);
+        position.liquidity = position.liquidity - liquidityDelta;
+    }
+
+    function lockLp(
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 releaseTime
+    ) public {
+        address owner = msg.sender;
+        bytes32 _key = PositionKey.compute(
+                        owner,
+                        tickLower,
+                        tickUpper
+                    );
+        // RoxPosition.Position memory position = self[_key];
+
+        RoxPosition.Position storage position = roxPositions[_key];
+        require(position.liquidity >= 0, "bol");
+        require(releaseTime > block.timestamp, "tahead");
+        emit LockLp(owner, releaseTime);
+        lpLocktime[_key] = releaseTime;
+    }
+
+
 
     function increaseLiquidity(
         address owner,
@@ -206,7 +257,7 @@ contract RoxPosnPool is IRoxPosnPool {
         int24 tickUpper,
         uint128 liquidityDelta
         ) public override onlySpotPool{
-        require(tickUpper - tickLower < 300000, "Liquidity Range Too Large");
+        require(tickUpper > tickLower && tickUpper - tickLower < 240000, "Liquidity Range Too Large");
         bytes32 _key = PositionKey.compute(
                         owner,
                         tickLower,
@@ -407,6 +458,9 @@ contract RoxPosnPool is IRoxPosnPool {
         RoxPosition.Position memory position = roxPositions[_key];
         UpdCache memory dCache;
         require(position.liquidity >= liquidityDelta, "bol");
+
+        if (lpLocktime[_key] > 0)
+            require(block.timestamp > lpLocktime[_key], "lp Locked");
 
         // // uint128 positionLiquidity_p = params.liquidity;// * price
         dCache.prStart = uint16(PriceRange.tickToPr(position.tickLower));
@@ -609,5 +663,88 @@ contract RoxPosnPool is IRoxPosnPool {
                 )
             );
     }
+
+
+    function _blockTimestamp() internal view virtual returns (uint32) {
+        return uint32(block.timestamp); // truncation is desired
+    }
+
+    function observe(
+        uint32[] calldata secondsAgos,
+        int24 tick,
+        uint16 observationIndex,
+        uint128 liquidity,
+        uint16 observationCardinality
+    )
+        external
+        view
+        override
+        noDelegateCall
+        returns (
+            int56[] memory tickCumulatives,
+            uint160[] memory secondsPerLiquidityCumulativeX128s
+        )
+    {
+        return
+            observations.observe(
+                _blockTimestamp(),
+                secondsAgos,
+                tick,
+                observationIndex,
+                liquidity,
+                observationCardinality
+            );
+    }
+
+    function initializeObserve( ) external onlySpotPool override returns (uint16 cardinality, uint16 cardinalityNext) {
+        (cardinality, cardinalityNext) = observations.initialize(
+            _blockTimestamp()
+        );
+    }
+
+    function writeObserve(
+        uint16 startObservationIndex,
+        uint32 blockTimestamp,
+        int24 tick,
+        uint128 liquidity,
+        uint16 startObservationCardinality,
+        uint16 observationCardinalityNext
+     ) external onlySpotPool override returns (uint16 observationIndex,uint16 observationCardinality)  {
+            (
+                observationIndex,
+                observationCardinality
+            ) = observations.write(
+                    startObservationIndex,
+                    blockTimestamp,
+                    tick,
+                    liquidity,
+                    startObservationCardinality,
+                    observationCardinalityNext
+                );
+     }
+
+    function observeSingle(
+            uint32 time,
+            int24 tick,
+            uint16 observationIndex,
+            uint128 liquidity,
+            uint16 observationCardinality
+        ) external view override returns (
+            int56 tickCumulative,
+            uint160 secondsPerLiquidityCumulativeX128
+        ) {
+
+            (
+                tickCumulative,
+                secondsPerLiquidityCumulativeX128
+            ) = observations.observeSingle(
+                    time,
+                    0,
+                    tick,
+                    observationIndex,
+                    liquidity,
+                    observationCardinality
+                );
+        }
 
 }

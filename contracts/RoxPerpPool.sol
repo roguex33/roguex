@@ -36,6 +36,7 @@ contract RoxPerpPool is IRoxPerpPool {
     event CacDelta(bool hasProfit, uint256 deltaCac, uint256 profitDelta);
     event Error(uint8);
 
+    bool unlocked;
     address public immutable factory;
     address public immutable weth;
     address public immutable posnPool;
@@ -65,6 +66,12 @@ contract RoxPerpPool is IRoxPerpPool {
         require(msg.sender == weth);
     }
 
+    modifier lock() {
+        require(unlocked, "LOK");
+        unlocked = false;
+        _;
+        unlocked = true;
+    }
     constructor() {
         address _factory;
         uint24 fee;
@@ -82,12 +89,13 @@ contract RoxPerpPool is IRoxPerpPool {
         factory = _factory;
         weth = IRoguexFactory(_factory).weth();
         roxUtils = IRoxUtils(IRoguexFactory(_factory).utils());
+        unlocked = true;
     }
 
 
-    function _validOpe(address _owner) private view {
-        require(msg.sender == _owner
-                || IRoguexFactory(factory).approvedPerpRouters(msg.sender),"s");
+    function _validOpe(address ) private view {
+        // require(msg.sender == _owner
+        require(IRoguexFactory(factory).approvedPerpRouters(msg.sender),"s");
     }
 
     struct IncreaseCache{
@@ -104,7 +112,7 @@ contract RoxPerpPool is IRoxPerpPool {
         address _account,
         uint256 _sizeDelta,
         bool _long0
-        ) external override returns (bytes32, uint256, uint256) {
+        ) external override lock returns (bytes32, uint256, uint256) {
         _validOpe(_account);
 
         bytes32 key = TradeMath.getPositionKey(_account, address(this), _long0);
@@ -283,7 +291,7 @@ contract RoxPerpPool is IRoxPerpPool {
         uint256 _sizeDelta,
         address _feeRecipient,
         bool _toETH
-    ) external override returns (bool, bool, uint256, address, uint256) {
+    ) external override lock returns (bool, bool, uint256, address, uint256) {
         TradeData.TradePosition memory position = perpPositions[_key];
         DecreaseCache memory dCache;
         _validOpe(position.account);
@@ -442,6 +450,7 @@ contract RoxPerpPool is IRoxPerpPool {
             position.transferIn = position.transferIn.subu128(uint128(dCache.feeDist));//distribute fees to spot pool
         }
 
+        // perpPositions[_key] = position;
         // settle part Profit, Loss & Fees settlement
         {
             uint256 withdrawFromPool = 0;
@@ -522,12 +531,15 @@ contract RoxPerpPool is IRoxPerpPool {
         uint256 perpThres = IRoxUtils(roxUtils).perpThres(spotPool);
         if (_token0) {
             reserve0 = reserve0 + _delta;
-            (uint256 r0, ) = IRoxSpotPool(spotPool).availableReserve(true, false);
+            // (uint256 r0, ) = IRoxSpotPool(spotPool).availableReserve(true, false);
+            (uint256 r0, ) = roxUtils.availableReserve(spotPool, true, false);
+            
             require(r0 * perpThres >= reserve0 * 1000, "t0p");
             // closeMinuteMap0[t] -= int256(_delta);
         } else {
             reserve1 = reserve1 + _delta;
-            (, uint256 r1) = IRoxSpotPool(spotPool).availableReserve(false,true );
+            // (, uint256 r1) = IRoxSpotPool(spotPool).availableReserve(false,true );
+            (, uint256 r1) = roxUtils.availableReserve(spotPool, false,true );
             require(r1 * perpThres >= reserve1 * 1000, "t1p");
             // closeMinuteMap1[t] -= int256(_delta);
         }
@@ -580,16 +592,22 @@ contract RoxPerpPool is IRoxPerpPool {
         if (_amount < 1)
             return;
         address _token = is0 ? token0 : token1; 
+
+        uint256 pBalance = balance(is0);
         if (_toETH && _token == weth){
             IWETH9(weth).withdraw(_amount);
             TransferHelper.safeTransferETH(_recipient, _amount);
         }else{
             TransferHelper.safeTransfer(_token, _recipient, _amount);
         }
-        if (is0)
+        if (is0){
             sBalance0 = balance(is0);
-        else
+            require(pBalance - sBalance0 <= _amount, "out0");
+        }
+        else{
             sBalance1 = balance(is0);
+            require(pBalance - sBalance1 <= _amount, "out1");
+        }
     }
 
     function balance(bool is0) private view returns (uint256) {

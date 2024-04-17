@@ -234,111 +234,6 @@ library SqrtPriceMath {
     }
 }
 
-abstract contract Context {
-    function _msgSender() internal view virtual returns (address payable) {
-        return msg.sender;
-    }
-
-    function _msgData() internal view virtual returns (bytes memory) {
-        this; // silence state mutability warning without generating bytecode - see https://github.com/ethereum/solidity/issues/2691
-        return msg.data;
-    }
-}
-
-library ECDSA {
-    /**
-     * @dev Returns the address that signed a hashed message (`hash`) with
-     * `signature`. This address can then be used for verification purposes.
-     *
-     * The `ecrecover` EVM opcode allows for malleable (non-unique) signatures:
-     * this function rejects them by requiring the `s` value to be in the lower
-     * half order, and the `v` value to be either 27 or 28.
-     *
-     * IMPORTANT: `hash` _must_ be the result of a hash operation for the
-     * verification to be secure: it is possible to craft signatures that
-     * recover to arbitrary addresses for non-hashed data. A safe way to ensure
-     * this is by receiving a hash of the original message (which may otherwise
-     * be too long), and then calling {toEthSignedMessageHash} on it.
-     */
-    function recover(
-        bytes32 hash,
-        bytes memory signature
-    ) internal pure returns (address) {
-        // Check the signature length
-        if (signature.length != 65) {
-            revert("ECDSA: invalid signature length");
-        }
-
-        // Divide the signature in r, s and v variables
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-
-        // ecrecover takes the signature parameters, and the only way to get them
-        // currently is to use assembly.
-        // solhint-disable-next-line no-inline-assembly
-        assembly {
-            r := mload(add(signature, 0x20))
-            s := mload(add(signature, 0x40))
-            v := byte(0, mload(add(signature, 0x60)))
-        }
-
-        return recover(hash, v, r, s);
-    }
-
-    /**
-     * @dev Overload of {ECDSA-recover-bytes32-bytes-} that receives the `v`,
-     * `r` and `s` signature fields separately.
-     */
-    function recover(
-        bytes32 hash,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) internal pure returns (address) {
-        // EIP-2 still allows signature malleability for ecrecover(). Remove this possibility and make the signature
-        // unique. Appendix F in the Ethereum Yellow paper (https://ethereum.github.io/yellowpaper/paper.pdf), defines
-        // the valid range for s in (281): 0 < s < secp256k1n ÷ 2 + 1, and for v in (282): v ∈ {27, 28}. Most
-        // signatures from current libraries generate a unique signature with an s-value in the lower half order.
-        //
-        // If your library generates malleable signatures, such as s-values in the upper range, calculate a new s-value
-        // with 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141 - s1 and flip v from 27 to 28 or
-        // vice versa. If your library also generates signatures with 0/1 for v instead 27/28, add 27 to v to accept
-        // these malleable signatures as well.
-        require(
-            uint256(s) <=
-                0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0,
-            "ECDSA: invalid signature 's' value"
-        );
-        require(v == 27 || v == 28, "ECDSA: invalid signature 'v' value");
-
-        // If the signature is valid (and not malleable), return the signer address
-        address signer = ecrecover(hash, v, r, s);
-        require(signer != address(0), "ECDSA: invalid signature");
-
-        return signer;
-    }
-
-    /**
-     * @dev Returns an Ethereum Signed Message, created from a `hash`. This
-     * replicates the behavior of the
-     * https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_sign[`eth_sign`]
-     * JSON-RPC method.
-     *
-     * See {recover}.
-     */
-    function toEthSignedMessageHash(
-        bytes32 hash
-    ) internal pure returns (bytes32) {
-        // 32 is the length in bytes of hash,
-        // enforced by the type signature above
-        return
-            keccak256(
-                abi.encodePacked("\x19Ethereum Signed Message:\n32", hash)
-            );
-    }
-}
-
 /**
  * @dev Wrappers over Solidity's arithmetic operations with added overflow
  * checks.
@@ -689,372 +584,6 @@ interface IERC20 {
  * functions have been added to mitigate the well-known issues around setting
  * allowances. See {IERC20-approve}.
  */
-contract ERC20 is Context, IERC20 {
-    using SafeMath for uint256;
-
-    mapping(address => uint256) private _balances;
-
-    mapping(address => mapping(address => uint256)) private _allowances;
-
-    uint256 private _totalSupply;
-
-    string private _name;
-    string private _symbol;
-    uint8 private _decimals;
-
-    /**
-     * @dev Sets the values for {name} and {symbol}, initializes {decimals} with
-     * a default value of 18.
-     *
-     * To select a different value for {decimals}, use {_setupDecimals}.
-     *
-     * All three of these values are immutable: they can only be set once during
-     * construction.
-     */
-    constructor(string memory name_, string memory symbol_) {
-        _name = name_;
-        _symbol = symbol_;
-        _decimals = 18;
-    }
-
-    /**
-     * @dev Returns the name of the token.
-     */
-    function name() public view virtual returns (string memory) {
-        return _name;
-    }
-
-    /**
-     * @dev Returns the symbol of the token, usually a shorter version of the
-     * name.
-     */
-    function symbol() public view virtual returns (string memory) {
-        return _symbol;
-    }
-
-    /**
-     * @dev Returns the number of decimals used to get its user representation.
-     * For example, if `decimals` equals `2`, a balance of `505` tokens should
-     * be displayed to a user as `5,05` (`505 / 10 ** 2`).
-     *
-     * Tokens usually opt for a value of 18, imitating the relationship between
-     * Ether and Wei. This is the value {ERC20} uses, unless {_setupDecimals} is
-     * called.
-     *
-     * NOTE: This information is only used for _display_ purposes: it in
-     * no way affects any of the arithmetic of the contract, including
-     * {IERC20-balanceOf} and {IERC20-transfer}.
-     */
-    function decimals() public view virtual returns (uint8) {
-        return _decimals;
-    }
-
-    /**
-     * @dev See {IERC20-totalSupply}.
-     */
-    function totalSupply() public view virtual override returns (uint256) {
-        return _totalSupply;
-    }
-
-    /**
-     * @dev See {IERC20-balanceOf}.
-     */
-    function balanceOf(
-        address account
-    ) public view virtual override returns (uint256) {
-        return _balances[account];
-    }
-
-    /**
-     * @dev See {IERC20-transfer}.
-     *
-     * Requirements:
-     *
-     * - `recipient` cannot be the zero address.
-     * - the caller must have a balance of at least `amount`.
-     */
-    function transfer(
-        address recipient,
-        uint256 amount
-    ) public virtual override returns (bool) {
-        _transfer(_msgSender(), recipient, amount);
-        return true;
-    }
-
-    /**
-     * @dev See {IERC20-allowance}.
-     */
-    function allowance(
-        address owner,
-        address spender
-    ) public view virtual override returns (uint256) {
-        return _allowances[owner][spender];
-    }
-
-    /**
-     * @dev See {IERC20-approve}.
-     *
-     * Requirements:
-     *
-     * - `spender` cannot be the zero address.
-     */
-    function approve(
-        address spender,
-        uint256 amount
-    ) public virtual override returns (bool) {
-        _approve(_msgSender(), spender, amount);
-        return true;
-    }
-
-    /**
-     * @dev See {IERC20-transferFrom}.
-     *
-     * Emits an {Approval} event indicating the updated allowance. This is not
-     * required by the EIP. See the note at the beginning of {ERC20}.
-     *
-     * Requirements:
-     *
-     * - `sender` and `recipient` cannot be the zero address.
-     * - `sender` must have a balance of at least `amount`.
-     * - the caller must have allowance for ``sender``'s tokens of at least
-     * `amount`.
-     */
-    function transferFrom(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) public virtual override returns (bool) {
-        _transfer(sender, recipient, amount);
-        _approve(
-            sender,
-            _msgSender(),
-            _allowances[sender][_msgSender()].sub(
-                amount,
-                "ERC20: transfer amount exceeds allowance"
-            )
-        );
-        return true;
-    }
-
-    /**
-     * @dev Atomically increases the allowance granted to `spender` by the caller.
-     *
-     * This is an alternative to {approve} that can be used as a mitigation for
-     * problems described in {IERC20-approve}.
-     *
-     * Emits an {Approval} event indicating the updated allowance.
-     *
-     * Requirements:
-     *
-     * - `spender` cannot be the zero address.
-     */
-    function increaseAllowance(
-        address spender,
-        uint256 addedValue
-    ) public virtual returns (bool) {
-        _approve(
-            _msgSender(),
-            spender,
-            _allowances[_msgSender()][spender].add(addedValue)
-        );
-        return true;
-    }
-
-    /**
-     * @dev Atomically decreases the allowance granted to `spender` by the caller.
-     *
-     * This is an alternative to {approve} that can be used as a mitigation for
-     * problems described in {IERC20-approve}.
-     *
-     * Emits an {Approval} event indicating the updated allowance.
-     *
-     * Requirements:
-     *
-     * - `spender` cannot be the zero address.
-     * - `spender` must have allowance for the caller of at least
-     * `subtractedValue`.
-     */
-    function decreaseAllowance(
-        address spender,
-        uint256 subtractedValue
-    ) public virtual returns (bool) {
-        _approve(
-            _msgSender(),
-            spender,
-            _allowances[_msgSender()][spender].sub(
-                subtractedValue,
-                "ERC20: decreased allowance below zero"
-            )
-        );
-        return true;
-    }
-
-    /**
-     * @dev Moves tokens `amount` from `sender` to `recipient`.
-     *
-     * This is internal function is equivalent to {transfer}, and can be used to
-     * e.g. implement automatic token fees, slashing mechanisms, etc.
-     *
-     * Emits a {Transfer} event.
-     *
-     * Requirements:
-     *
-     * - `sender` cannot be the zero address.
-     * - `recipient` cannot be the zero address.
-     * - `sender` must have a balance of at least `amount`.
-     */
-    function _transfer(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) internal virtual {
-        require(sender != address(0), "ERC20: transfer from the zero address");
-        require(recipient != address(0), "ERC20: transfer to the zero address");
-
-        _beforeTokenTransfer(sender, recipient, amount);
-
-        _balances[sender] = _balances[sender].sub(
-            amount,
-            "ERC20: transfer amount exceeds balance"
-        );
-        _balances[recipient] = _balances[recipient].add(amount);
-        emit Transfer(sender, recipient, amount);
-    }
-
-    /** @dev Creates `amount` tokens and assigns them to `account`, increasing
-     * the total supply.
-     *
-     * Emits a {Transfer} event with `from` set to the zero address.
-     *
-     * Requirements:
-     *
-     * - `to` cannot be the zero address.
-     */
-    function _mint(address account, uint256 amount) internal virtual {
-        require(account != address(0), "ERC20: mint to the zero address");
-
-        _beforeTokenTransfer(address(0), account, amount);
-
-        _totalSupply = _totalSupply.add(amount);
-        _balances[account] = _balances[account].add(amount);
-        emit Transfer(address(0), account, amount);
-    }
-
-    /**
-     * @dev Destroys `amount` tokens from `account`, reducing the
-     * total supply.
-     *
-     * Emits a {Transfer} event with `to` set to the zero address.
-     *
-     * Requirements:
-     *
-     * - `account` cannot be the zero address.
-     * - `account` must have at least `amount` tokens.
-     */
-    function _burn(address account, uint256 amount) internal virtual {
-        require(account != address(0), "ERC20: burn from the zero address");
-
-        _beforeTokenTransfer(account, address(0), amount);
-
-        _balances[account] = _balances[account].sub(
-            amount,
-            "ERC20: burn amount exceeds balance"
-        );
-        _totalSupply = _totalSupply.sub(amount);
-        emit Transfer(account, address(0), amount);
-    }
-
-    /**
-     * @dev Sets `amount` as the allowance of `spender` over the `owner` s tokens.
-     *
-     * This internal function is equivalent to `approve`, and can be used to
-     * e.g. set automatic allowances for certain subsystems, etc.
-     *
-     * Emits an {Approval} event.
-     *
-     * Requirements:
-     *
-     * - `owner` cannot be the zero address.
-     * - `spender` cannot be the zero address.
-     */
-    function _approve(
-        address owner,
-        address spender,
-        uint256 amount
-    ) internal virtual {
-        require(owner != address(0), "ERC20: approve from the zero address");
-        require(spender != address(0), "ERC20: approve to the zero address");
-
-        _allowances[owner][spender] = amount;
-        emit Approval(owner, spender, amount);
-    }
-
-    /**
-     * @dev Sets {decimals} to a value other than the default one of 18.
-     *
-     * WARNING: This function should only be called from the constructor. Most
-     * applications that interact with token contracts will not expect
-     * {decimals} to ever change, and may work incorrectly if it does.
-     */
-    function _setupDecimals(uint8 decimals_) internal virtual {
-        _decimals = decimals_;
-    }
-
-    /**
-     * @dev Hook that is called before any transfer of tokens. This includes
-     * minting and burning.
-     *
-     * Calling conditions:
-     *
-     * - when `from` and `to` are both non-zero, `amount` of ``from``'s tokens
-     * will be to transferred to `to`.
-     * - when `from` is zero, `amount` tokens will be minted for `to`.
-     * - when `to` is zero, `amount` of ``from``'s tokens will be burned.
-     * - `from` and `to` are never both zero.
-     *
-     * To learn more about hooks, head to xref:ROOT:extending-contracts.adoc#using-hooks[Using Hooks].
-     */
-    function _beforeTokenTransfer(
-        address from,
-        address to,
-        uint256 amount
-    ) internal virtual {}
-}
-
-/**
- * @title Counters
- * @author Matt Condon (@shrugs)
- * @dev Provides counters that can only be incremented or decremented by one. This can be used e.g. to track the number
- * of elements in a mapping, issuing ERC721 ids, or counting request ids.
- *
- * Include with `using Counters for Counters.Counter;`
- * Since it is not possible to overflow a 256 bit integer with increments of one, `increment` can skip the {SafeMath}
- * overflow check, thereby saving gas. This does assume however correct usage, in that the underlying `_value` is never
- * directly accessed.
- */
-library Counters {
-    using SafeMath for uint256;
-
-    struct Counter {
-        // This variable should never be directly accessed by users of the library: interactions must be restricted to
-        // the library's function. As of Solidity v0.5.2, this cannot be enforced, though there is a proposal to add
-        // this feature: see https://github.com/ethereum/solidity/issues/4637
-        uint256 _value; // default: 0
-    }
-
-    function current(Counter storage counter) internal view returns (uint256) {
-        return counter._value;
-    }
-
-    function increment(Counter storage counter) internal {
-        // The {SafeMath} overflow check can be skipped here, see the comment at the top
-        counter._value += 1;
-    }
-
-    function decrement(Counter storage counter) internal {
-        counter._value = counter._value.sub(1);
-    }
-}
 
 /**
  * @dev Collection of functions related to the address type
@@ -1465,8 +994,6 @@ interface IRoxSpotPool {
     /// @notice The second of the two tokens of the pool, sorted by address
     /// @return The token contract address
     function token1() external view returns (address);
-    
-    function roxUtils() external view returns (address);
 
     function tickSpacing() external view returns (int24);
 
@@ -1734,165 +1261,6 @@ library Math {
     }
 }
 
-/**
- * @title SignedSafeMath
- * @dev Signed math operations with safety checks that revert on error.
- */
-library SignedSafeMath {
-    int256 private constant _INT256_MIN = -2 ** 255;
-
-    /**
-     * @dev Returns the multiplication of two signed integers, reverting on
-     * overflow.
-     *
-     * Counterpart to Solidity's `*` operator.
-     *
-     * Requirements:
-     *
-     * - Multiplication cannot overflow.
-     */
-    function mul(int256 a, int256 b) internal pure returns (int256) {
-        // Gas optimization: this is cheaper than requiring 'a' not being zero, but the
-        // benefit is lost if 'b' is also tested.
-        // See: https://github.com/OpenZeppelin/openzeppelin-contracts/pull/522
-        if (a == 0) {
-            return 0;
-        }
-
-        require(
-            !(a == -1 && b == _INT256_MIN),
-            "SignedSafeMath: multiplication overflow"
-        );
-
-        int256 c = a * b;
-        require(c / a == b, "SignedSafeMath: multiplication overflow");
-
-        return c;
-    }
-
-    /**
-     * @dev Returns the integer division of two signed integers. Reverts on
-     * division by zero. The result is rounded towards zero.
-     *
-     * Counterpart to Solidity's `/` operator. Note: this function uses a
-     * `revert` opcode (which leaves remaining gas untouched) while Solidity
-     * uses an invalid opcode to revert (consuming all remaining gas).
-     *
-     * Requirements:
-     *
-     * - The divisor cannot be zero.
-     */
-    function div(int256 a, int256 b) internal pure returns (int256) {
-        require(b != 0, "SignedSafeMath: division by zero");
-        require(
-            !(b == -1 && a == _INT256_MIN),
-            "SignedSafeMath: division overflow"
-        );
-
-        int256 c = a / b;
-
-        return c;
-    }
-
-    /**
-     * @dev Returns the subtraction of two signed integers, reverting on
-     * overflow.
-     *
-     * Counterpart to Solidity's `-` operator.
-     *
-     * Requirements:
-     *
-     * - Subtraction cannot overflow.
-     */
-    function sub(int256 a, int256 b) internal pure returns (int256) {
-        int256 c = a - b;
-        require(
-            (b >= 0 && c <= a) || (b < 0 && c > a),
-            "SignedSafeMath: subtraction overflow"
-        );
-
-        return c;
-    }
-
-    /**
-     * @dev Returns the addition of two signed integers, reverting on
-     * overflow.
-     *
-     * Counterpart to Solidity's `+` operator.
-     *
-     * Requirements:
-     *
-     * - Addition cannot overflow.
-     */
-    function add(int256 a, int256 b) internal pure returns (int256) {
-        int256 c = a + b;
-        require(
-            (b >= 0 && c >= a) || (b < 0 && c < a),
-            "SignedSafeMath: addition overflow"
-        );
-
-        return c;
-    }
-}
-
-/**
- * @dev Contract module that helps prevent reentrant calls to a function.
- *
- * Inheriting from `ReentrancyGuard` will make the {nonReentrant} modifier
- * available, which can be applied to functions to make sure there are no nested
- * (reentrant) calls to them.
- *
- * Note that because there is a single `nonReentrant` guard, functions marked as
- * `nonReentrant` may not call one another. This can be worked around by making
- * those functions `private`, and then adding `external` `nonReentrant` entry
- * points to them.
- *
- * TIP: If you would like to learn more about reentrancy and alternative ways
- * to protect against it, check out our blog post
- * https://blog.openzeppelin.com/reentrancy-after-istanbul/[Reentrancy After Istanbul].
- */
-abstract contract ReentrancyGuard {
-    // Booleans are more expensive than uint256 or any type that takes up a full
-    // word because each write operation emits an extra SLOAD to first read the
-    // slot's contents, replace the bits taken up by the boolean, and then write
-    // back. This is the compiler's defense against contract upgrades and
-    // pointer aliasing, and it cannot be disabled.
-
-    // The values being non-zero value makes deployment a bit more expensive,
-    // but in exchange the refund on every call to nonReentrant will be lower in
-    // amount. Since refunds are capped to a percentage of the total
-    // transaction's gas, it is best to keep them low in cases like this one, to
-    // increase the likelihood of the full refund coming into effect.
-    uint256 private constant _NOT_ENTERED = 1;
-    uint256 private constant _ENTERED = 2;
-
-    uint256 private _status;
-
-    constructor() {
-        _status = _NOT_ENTERED;
-    }
-
-    /**
-     * @dev Prevents a contract from calling itself, directly or indirectly.
-     * Calling a `nonReentrant` function from another `nonReentrant`
-     * function is not supported. It is possible to prevent this from happening
-     * by making the `nonReentrant` function external, and make it call a
-     * `private` function that does the actual work.
-     */
-    modifier nonReentrant() {
-        // On the first call to nonReentrant, _notEntered will be true
-        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
-
-        // Any calls to nonReentrant after this point will fail
-        _status = _ENTERED;
-
-        _;
-
-        // By storing the original value once again, a refund is triggered (see
-        // https://eips.ethereum.org/EIPS/eip-2200)
-        _status = _NOT_ENTERED;
-    }
-}
 
 /// @title Callback for IRoxSpotPoolActions#mint
 /// @notice Any contract that calls IRoxSpotPoolActions#mint must implement this interface
@@ -2156,30 +1524,6 @@ library TickMath {
     }
 }
 
-// File contracts/Hypervisor.sol
-
-interface IVoter {
-    function notifyFeeAmount(
-        address poolAddrss,
-        uint amount0,
-        uint amount1
-    ) external;
-
-    function createGauge(
-        address _pool,
-        address _hypervisor
-    ) external returns (address, address, address);
-
-    function masterChefs(address) external returns (address);
-}
-
-interface IMasterChef {
-    function deposit(uint256 _amount, address _recipient) external;
-
-    function withdraw(uint256 _amount, address _recipient) external;
-
-    function notifyRewardAmount(address token, uint256 _amount) external;
-}
 
 library PriceUtils {
     using SafeMath for uint256;
@@ -2225,466 +1569,139 @@ library PriceUtils {
         tickLower = roundTick - gapI;
     }
 
-    function getSpli(
-        uint256 price,
-        int24 tick,
-        uint256 priceRange,
-        uint256 rangeSion,
-        uint128 liquidity
-    ) internal pure returns (uint256) {
-        (int24 tickUpper, int24 tickLower, , ) = getUpperAndLower(
-            price,
-            tick,
-            priceRange,
-            rangeSion
-        );
-        uint160 lastPrice = uint160(
-            FullMath.mulDiv(Math.sqrt(price), 2 ** 96, 1e18)
-        );
-        uint160 spUpper = TickMath.getSqrtRatioAtTick(tickUpper);
-        uint160 spLower = TickMath.getSqrtRatioAtTick(tickLower);
-        uint256 depost0 = SqrtPriceMath.getAmount0Delta(
-            lastPrice,
-            spUpper,
-            liquidity,
-            true
-        );
-        uint256 depost1 = SqrtPriceMath.getAmount1Delta(
-            spLower,
-            lastPrice,
-            liquidity,
-            true
-        );
-        return FullMath.mulDiv(depost1, 1e36, depost0);
-    }
-}
-
-interface IDisFee {
-    function disFee(
-        address token,
-        address pool,
-        address chef,
-        uint256 amount,
-        bool isToken0
-    ) external;
 }
 
 interface IWETH9 {
     function deposit() external payable;
 }
 
-interface IRoxUtils{
-    function getTwapTickUnsafe(address _spotPool, uint32 _sec) external view returns (int24 tick);      
-}
-/// @title Hypervisor v1.3
-/// which allows for arbitrary liquidity provision: one-sided, lop-sided, and balanced
-contract Hypervisor is IMintCallback, ERC20, ReentrancyGuard {
+contract DeadLp {
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
-    using SignedSafeMath for int256;
     address public immutable weth;
-    address public immutable hyFactory;
-    address public immutable voter;
-    address public immutable feeReward;
-    IRoxSpotPool public pool;
-    IERC20 public token0;
-    IERC20 public token1;
-
     int24 public constant tickSpacing = 600;
-    int24 public baseLower;
-    int24 public baseUpper;
-    int24 public limitLower;
-    int24 public limitUpper;
-    int24 public preRebTick;
-    int24 public preTickGap;
-
-    uint256 public priceRange = 800;
     uint256 public constant rangeSion = 1000;
     uint256 public constant PRECISION = 1e36;
 
-    uint256 public rebalanceTimeRecord;
-    uint256 public latestRebTime;
-    mapping(address => uint256) public lockedAmount; //stakeAmount
-
-    bool mintCalled;
-
-    event Deposit(
-        address indexed sender,
-        address indexed to,
-        uint256 shares,
+    mapping(address => bool) private depositPool;
+    
+    event DepositDeadLp(
         uint256 amount0,
-        uint256 amount1
+        uint256 amount1,
+        uint128 liquidity,
+        int24 tickLower,
+        int24 tickUppder
     );
-
-    event Withdraw(
-        address indexed sender,
-        address indexed to,
-        uint256 shares,
-        uint256 amount0,
-        uint256 amount1
-    );
-
-    event Rebalance(
-        int24 tick,
-        uint256 totalAmount0,
-        uint256 totalAmount1,
-        uint256 feeAmount0,
-        uint256 feeAmount1,
-        uint256 totalSupply,
-        int24 baseUpper,
-        int24 baseLower,
-        int24 limitUpper,
-        int24 limitLower
-    );
-
-    event ZeroBurn(uint256 fees0, uint256 fees1);
 
     constructor(
-        address _weth,
-        address _feeReward,
-        address _voter,
-        address _pool,
-        address _hyFactory
-    ) ERC20("LP", "LP") {
+        address _weth
+    ) {
         weth = _weth;
-        feeReward = _feeReward;
-        voter = _voter;
-        pool = IRoxSpotPool(_pool);
-        token0 = IERC20(pool.token0());
-        token1 = IERC20(pool.token1());
-        hyFactory = _hyFactory;
     }
 
     function deposit(
+        address spotPool,
         uint256 deposit0,
         uint256 deposit1,
-        address to
-    ) external payable nonReentrant returns (uint256 shares) {
-        require(to != address(0) && to != address(this), "to");
+        uint256 range
+    ) external payable {
         address from = msg.sender;
-        zeroBurn();
-        uint ratio = getDepositAmountRatio();
-        if (ratio != 0) {
-            uint estimate1 = FullMath.mulDiv(deposit0, ratio, PRECISION);
-            require(
-                deposit1 >= estimate1.mul(990).div(1000) &&
-                    deposit1 <= estimate1.mul(1010).div(1000),
-                "nr"
-            );
-        }
-        (uint256 pool0, uint256 pool1) = getTotalAmounts();
-        if (pool0 > 0) require(deposit0 > 0, "nz0");
-        if (pool1 > 0) require(deposit1 > 0, "nz1");
-        (uint256 price, ) = currentPrice();
-        shares = deposit1.add(FullMath.mulDiv(deposit0, price, PRECISION));
-        if (address(token0) == weth && msg.value >= deposit0) {
+        address token0 = IRoxSpotPool(spotPool).token0();
+        address token1 = IRoxSpotPool(spotPool).token1();
+
+        depositPool[spotPool] = true;
+        if (token0 == weth && msg.value >= deposit0) {
             IWETH9(weth).deposit{value: msg.value}();
         } else {
-            token0.safeTransferFrom(from, address(this), deposit0);
+            IERC20(token0).safeTransferFrom(from, address(this), deposit0);
         }
-        if (address(token1) == weth && msg.value >= deposit1) {
+        if (token1 == weth && msg.value >= deposit1) {
             IWETH9(weth).deposit{value: msg.value}();
         } else {
-            token1.safeTransferFrom(from, address(this), deposit1);
+            IERC20(token1).safeTransferFrom(from, address(this), deposit1);
         }
-
-        uint256 total = totalSupply();
-        if (total != 0) {
-            uint256 pool0PricedInToken1 = FullMath.mulDiv(
-                pool0,
-                price,
-                PRECISION
-            );
-            shares = shares.mul(total).div(pool0PricedInToken1.add(pool1));
-        }
-        _reb();
-        _mint(to, shares);
-        address chef = IVoter(voter).masterChefs(address(this));
-        IMasterChef(chef).deposit(shares, to);
-        lockedAmount[to] = lockedAmount[to].add(shares);
-
-        emit Deposit(from, to, shares, deposit0, deposit1);
+        _depositDeadLp(token0, token1, range, spotPool);
+        depositPool[spotPool] = false;
     }
 
-    /// @param shares Number of liquidity tokens to redeem as pool assets
-    /// @param to Address to which redeemed pool assets are sent
-    /// @param from Address from which liquidity tokens are sent
-    /// @return amount0 Amount of token0 redeemed by the submitted liquidity tokens
-    /// @return amount1 Amount of token1 redeemed by the submitted liquidity tokens
-    function withdraw(
-        uint256 shares,
-        address to,
-        address from
-    ) external nonReentrant returns (uint256 amount0, uint256 amount1) {
-        require(shares > 0, "s0");
-        // require(to != address(0), "to");
-        require(from == msg.sender, "ow");
-        require(balanceOf(from) >= shares, "ifs");
-        /// update fees
-        zeroBurn();
 
-        /// Withdraw liquidity from spot pool
-        (uint256 base0, uint256 base1) = _burnLiquidity(
-            baseLower,
-            baseUpper,
-            _liquidityForShares(baseLower, baseUpper, shares),
-            to,
-            false
-        );
-        (uint256 limit0, uint256 limit1) = _burnLiquidity(
-            limitLower,
-            limitUpper,
-            _liquidityForShares(limitLower, limitUpper, shares),
-            to,
-            false
-        );
-        pool.liqdCheck();
+    function _depositDeadLp(
+        address token0, 
+        address token1,
+        uint256 priceRange, 
+        address spotPool) internal {
+        (uint256 price, int24 curTick) = currentPrice(spotPool);
 
-        // Push tokens proportional to unused balances
-        uint256 unusedAmount0 = token0.balanceOf(address(this)).mul(shares).div(
-            totalSupply()
-        );
-        uint256 unusedAmount1 = token1.balanceOf(address(this)).mul(shares).div(
-            totalSupply()
-        );
-        if (unusedAmount0 > 0) token0.safeTransfer(to, unusedAmount0);
-        if (unusedAmount1 > 0) token1.safeTransfer(to, unusedAmount1);
-
-        amount0 = base0.add(limit0).add(unusedAmount0);
-        amount1 = base1.add(limit1).add(unusedAmount1);
-
-        address chef = IVoter(voter).masterChefs(address(this));
-        IMasterChef(chef).withdraw(shares, from);
-        lockedAmount[from] = lockedAmount[from].sub(shares);
-        _burn(from, shares);
-        emit Withdraw(from, to, shares, amount0, amount1);
-    }
-
-    function _reb() internal {
-        if (!_rebalance()) {
-            _compound();
-        }
-    }
-
-    function _zeroBurn(
-        int24 tickLower,
-        int24 tickUpper
-    ) internal returns (uint128 liquidity) {
-        /// update fees for inclusion
-        (liquidity, , , , ) = _position(tickLower, tickUpper);
-        if (liquidity > 0) {
-            pool.burnN(address(this), tickLower, tickUpper, 0);
-            (uint256 owed0, uint256 owed1) = pool.collect(
-                address(this),
-                tickLower,
-                tickUpper,
-                type(uint128).max,
-                type(uint128).max
-            );
-            address chef = IVoter(voter).masterChefs(address(this));
-            if (owed0 > 0) {
-                token0.approve(feeReward, owed0);
-                IDisFee(feeReward).disFee(
-                    address(token0),
-                    address(pool),
-                    chef,
-                    owed0,
-                    true
-                );
-            }
-            if (owed1 > 0) {
-                token1.approve(feeReward, owed1);
-                IDisFee(feeReward).disFee(
-                    address(token1),
-                    address(pool),
-                    chef,
-                    owed1,
-                    false
-                );
-            }
-            emit ZeroBurn(owed0, owed1);
-        }
-    }
-
-    /// @notice Update fees of the positions
-    /// @return baseLiquidity Fee of base position
-    /// @return limitLiquidity Fee of limit position
-    function zeroBurn()
-        internal
-        returns (uint128 baseLiquidity, uint128 limitLiquidity)
-    {
-        baseLiquidity = _zeroBurn(baseLower, baseUpper);
-        limitLiquidity = _zeroBurn(limitLower, limitUpper);
-    }
-
-    function rebalanceTime() public view returns (uint256){
-        return rebalanceTimeRecord & 0xFFFFFFFF;
-    }
-
-    function _rebalance() internal returns (bool) {
-        (uint256 price, int24 curTick) = currentPrice();
-        uint256 total = totalSupply();
-        // return (tSlot.tkRange, tSlot.twapSec, tSlot.reblanceGapSec);
-
-        if (total > 0){
-            (int24 tickGap, uint32 twapSec, uint32 s) = IHypervisorFactory(hyFactory).timeSlot();
-
-            uint256 timeGap = block.timestamp - latestRebTime;
-            if (timeGap < s)
-                return false;
-                
-            //twap check, always check
-            {
-                // int24 twapTick = pool.getTwapTickUnsafe(twapSec);
-
-                int24 twapTick = IRoxUtils(pool.roxUtils()).getTwapTickUnsafe(address(pool), twapSec);
-
-                int24 twap_tick_gap = curTick - twapTick;
-                twap_tick_gap = twap_tick_gap < 0 ? -twap_tick_gap : twap_tick_gap;
-                if (twap_tick_gap > tickGap){
-                    // revert("test");
-                    return false;
-                }
-            }
-            //check time
-            // if (timeGap < IHypervisorFactory(hyFactory).decP())
-            int24 cur_pre_gap = curTick - preRebTick;
-            cur_pre_gap = cur_pre_gap < 0 ? -cur_pre_gap : cur_pre_gap;
-            if (cur_pre_gap > preTickGap / 2) {
-                priceRange = IHypervisorFactory(hyFactory).rangeDelta(priceRange, rebalanceTimeRecord);
-                rebalanceTimeRecord = (rebalanceTimeRecord << 32) | (0xFFFFFFFF & block.timestamp);
-            }
-            else if (timeGap > IHypervisorFactory(hyFactory).decP() ){
-                //adjust range.
-                priceRange = IHypervisorFactory(hyFactory).decreaseRange(priceRange);
-            }
-            else{
-                return false;
-            }
-        }
-        latestRebTime = block.timestamp;
-
-        /// update fees
-        zeroBurn();
-
-        /// Withdraw all liquidity and collect all fees from spot pool
-        (
-            uint128 baseLiquidity,
-            uint256 feesLimit0,
-            uint256 feesLimit1,
-            ,
-
-        ) = _position(baseLower, baseUpper);
-        (
-            uint128 limitLiquidity,
-            uint256 feesBase0,
-            uint256 feesBase1,
-            ,
-
-        ) = _position(limitLower, limitUpper);
-
-        _burnLiquidity(
-            baseLower,
-            baseUpper,
-            baseLiquidity,
-            address(this),
-            true
-        );
-        _burnLiquidity(
-            limitLower,
-            limitUpper,
-            limitLiquidity,
-            address(this),
-            true
-        );
-
-        uint256 _t0b = token0.balanceOf(address(this));
-        uint256 _t1b = token1.balanceOf(address(this));
-
-        (baseUpper, baseLower, preRebTick, preTickGap) = PriceUtils
+        (int24 baseUpper, int24 baseLower, int24 preRebTick, ) = PriceUtils
             .getUpperAndLower(price, curTick, priceRange, rangeSion);
-        uint128 liquidity = _liquidityForAmounts(
-            baseLower,
-            baseUpper,
-            _t0b,
-            _t1b
-        );
-        _mintLiquidity(baseLower, baseUpper, liquidity, address(this));
-        if (token0.balanceOf(address(this)) > token1.balanceOf(address(this))) {
-            limitLower = preRebTick + 600; //(curTick / 600) * 600 + (curTick > 0 ? 600 : 0);
-            limitUpper = baseUpper + 600;
-        } else {
-            limitLower = baseLower - 600;
-            limitUpper = preRebTick;
-        }
-        liquidity = _liquidityForAmounts(
-            limitLower,
-            limitUpper,
-            token0.balanceOf(address(this)),
-            token1.balanceOf(address(this))
-        );
-        _mintLiquidity(limitLower, limitUpper, liquidity, address(this));
-        emit Rebalance(
-            curTick,
-            _t0b,
-            _t1b,
-            feesBase0.add(feesLimit0),
-            feesBase1.add(feesLimit1),
-            total,
-            baseUpper,
-            baseLower,
-            limitUpper,
-            limitLower
-        );
-        pool.liqdCheck();
-        return true;
-    }
 
-    function _compound() internal {
-        uint128 liquidity = _liquidityForAmounts(
-            baseLower,
-            baseUpper,
-            token0.balanceOf(address(this)),
-            token1.balanceOf(address(this))
-        );
-        _mintLiquidity(baseLower, baseUpper, liquidity, address(this));
-        liquidity = _liquidityForAmounts(
-            limitLower,
-            limitUpper,
-            token0.balanceOf(address(this)),
-            token1.balanceOf(address(this))
-        );
-        _mintLiquidity(limitLower, limitUpper, liquidity, address(this));
-    }
-
-    function _beforeTokenTransfer(
-        address from,
-        address to,
-        uint256 amount // Add virtual here!
-    ) internal virtual override {
-        if (from != address(0)) {
-            require(
-                balanceOf(from).sub(lockedAmount[from]) >= amount,
-                "alocked"
+        {
+            uint256 _t0b = IERC20(token0).balanceOf(address(this));
+            uint256 _t1b = IERC20(token1).balanceOf(address(this));
+            uint128 liquidity = _liquidityForAmounts(
+                baseLower,
+                baseUpper,
+                _t0b,
+                _t1b,
+                spotPool
             );
+            _mintLiquidity(baseLower, baseUpper, liquidity, address(this), spotPool);
+            _t0b = _t0b.sub(IERC20(token0).balanceOf(address(this)));
+            _t1b = _t1b.sub(IERC20(token1).balanceOf(address(this)));
+            emit DepositDeadLp(
+                    _t0b,
+                    _t1b,
+                    liquidity,
+                    baseLower,
+                    baseUpper
+                );
+            // payed0 += _t0b;
+            // payed1 += _t1b;
         }
-        super._beforeTokenTransfer(from, to, amount); // Call parent hook
+
+        {
+            int24 limitLower;
+            int24 limitUpper;
+            uint256 _t0b = IERC20(token0).balanceOf(address(this));
+            uint256 _t1b = IERC20(token1).balanceOf(address(this));
+            if (_t0b > _t1b) {
+                limitLower = preRebTick + 600; //(curTick / 600) * 600 + (curTick > 0 ? 600 : 0);
+                limitUpper = baseUpper + 600;
+            } else {
+                limitLower = baseLower - 600;
+                limitUpper = preRebTick;
+            }
+            uint128 liquidity = _liquidityForAmounts(
+                limitLower,
+                limitUpper,
+                _t0b,
+                _t1b,
+                spotPool
+            );
+            _mintLiquidity(limitLower, limitUpper, liquidity, address(this), spotPool);
+            _t0b = _t0b.sub(IERC20(token0).balanceOf(address(this)));
+            _t1b = _t1b.sub(IERC20(token1).balanceOf(address(this)));
+            emit DepositDeadLp(
+                    _t0b,
+                    _t1b,
+                    liquidity,
+                    limitLower,
+                    limitUpper
+                );
+            // payed0 += _t0b;
+            // payed1 += _t1b;
+        }
     }
 
-    /// @notice Adds the liquidity for the given position
-    /// @param tickLower The lower tick of the position in which to add liquidity
-    /// @param tickUpper The upper tick of the position in which to add liquidity
-    /// @param liquidity The amount of liquidity to mint
-    /// @param payer Payer Data
     function _mintLiquidity(
         int24 tickLower,
         int24 tickUpper,
         uint128 liquidity,
-        address payer
+        address payer,
+        address pool
     ) internal {
         if (liquidity > 0) {
-            mintCalled = true;
-            pool.mint(
+            IRoxSpotPool(pool).mint(
                 address(this),
                 tickLower,
                 tickUpper,
@@ -2693,174 +1710,24 @@ contract Hypervisor is IMintCallback, ERC20, ReentrancyGuard {
             );
             // require(amount0 >= amount0Min && amount1 >= amount1Min, "PSC");
         }
+        
     }
 
-    /// @notice Burn liquidity from the sender and collect tokens owed for the liquidity
-    /// @param tickLower The lower tick of the position for which to burn liquidity
-    /// @param tickUpper The upper tick of the position for which to burn liquidity
-    /// @param liquidity The amount of liquidity to burn
-    /// @param to The address which should receive the fees collected
-    /// @param collectAll If true, collect all tokens owed in the pool, else collect the owed tokens of the burn
-    function _burnLiquidity(
-        int24 tickLower,
-        int24 tickUpper,
-        uint128 liquidity,
-        address to,
-        bool collectAll
-    ) internal returns (uint256 amount0, uint256 amount1) {
-        if (liquidity > 0) {
-            /// Burn liquidity
-            (uint256 owed0, uint256 owed1) = pool.burnN(
-                address(this),
-                tickLower,
-                tickUpper,
-                liquidity
-            );
-
-            // Collect amount owed
-            uint128 collect0 = collectAll
-                ? type(uint128).max
-                : _uint128Safe(owed0);
-            uint128 collect1 = collectAll
-                ? type(uint128).max
-                : _uint128Safe(owed1);
-            if (collect0 > 0 || collect1 > 0) {
-                (amount0, amount1) = pool.collect(
-                    to,
-                    tickLower,
-                    tickUpper,
-                    collect0,
-                    collect1
-                );
-            }
-        }
-    }
-
-    /// @notice Get the liquidity amount for given liquidity tokens
-    /// @param tickLower The lower tick of the position
-    /// @param tickUpper The upper tick of the position
-    /// @param shares Shares of position
-    /// @return The amount of liquidity toekn for shares
-    function _liquidityForShares(
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 shares
-    ) internal view returns (uint128) {
-        (uint128 position, , , , ) = _position(tickLower, tickUpper);
-        return _uint128Safe(uint256(position).mul(shares).div(totalSupply()));
-    }
-
-    /// @notice Get the info of the given position
-    /// @param tickLower The lower tick of the position
-    /// @param tickUpper The upper tick of the position
-    /// @return liquidity The amount of liquidity of the position
-    /// @return tokensOwed0 Amount of token0 owed
-    /// @return tokensOwed1 Amount of token1 owed
-    function _position(
-        int24 tickLower,
-        int24 tickUpper
-    )
-        internal
-        view
-        returns (
-            uint128 liquidity,
-            uint128 tokensOwed0,
-            uint128 tokensOwed1,
-            uint256 positionT0,
-            uint256 positionT1
-        )
-    {
-        bytes32 positionKey = keccak256(
-            abi.encodePacked(address(this), tickLower, tickUpper)
-        );
-        IRoxPosnPool posnPool = IRoxPosnPool(pool.roxPosnPool());
-        (liquidity, , , tokensOwed0, tokensOwed1) = posnPool.positionsSum(
-            positionKey
-        );
-
-        (uint160 sqrtPriceX96, int24 tick, , , , , ) = pool.slot0();
-        (positionT0, positionT1) = posnPool.estimateDecreaseLiquidity(
-            positionKey,
-            liquidity,
-            tick,
-            sqrtPriceX96
-        );
-    }
 
     /// @notice Callback function of spot pool mint
     function mintCallback(
         uint256 amount0,
         uint256 amount1,
         bytes calldata /*data*/
-    ) external override {
-        require(msg.sender == address(pool));
-        require(mintCalled == true);
-        mintCalled = false;
+    ) external {
+        require(depositPool[msg.sender]);
 
-        if (amount0 > 0) token0.safeTransfer(msg.sender, amount0);
-        if (amount1 > 0) token1.safeTransfer(msg.sender, amount1);
+        address token0 = IRoxSpotPool(msg.sender).token0();
+        address token1 = IRoxSpotPool(msg.sender).token1();
+        if (amount0 > 0) IERC20(token0).safeTransfer(msg.sender, amount0);
+        if (amount1 > 0) IERC20(token1).safeTransfer(msg.sender, amount1);
     }
 
-    /// @return total0 Quantity of token0 in both positions and unused in the Hypervisor
-    /// @return total1 Quantity of token1 in both positions and unused in the Hypervisor
-    function getTotalAmounts()
-        public
-        view
-        returns (uint256 total0, uint256 total1)
-    {
-        (, uint256 base0, uint256 base1) = getBasePosition();
-        (, uint256 limit0, uint256 limit1) = getLimitPosition();
-        total0 = token0.balanceOf(address(this)).add(base0).add(limit0);
-        total1 = token1.balanceOf(address(this)).add(base1).add(limit1);
-    }
-
-    function getUserAmounts(
-        address account
-    ) public view returns (uint256 amount0, uint256 amount1) {
-        if (totalSupply() == 0) return (0, 0);
-        (uint256 total0, uint256 total1) = getTotalAmounts();
-        uint256 lpbalance = balanceOf(account);
-        amount0 = lpbalance.mul(total0).div(totalSupply());
-        amount1 = lpbalance.mul(total1).div(totalSupply());
-    }
-
-    function getBasePosition()
-        public
-        view
-        returns (uint128 liquidity, uint256 amount0, uint256 amount1)
-    {
-        uint128 tokensOwed0;
-        uint128 tokensOwed1;
-        (liquidity, tokensOwed0, tokensOwed1, amount0, amount1) = _position(
-            baseLower,
-            baseUpper
-        );
-
-        amount0 = amount0.add(uint256(tokensOwed0));
-        amount1 = amount1.add(uint256(tokensOwed1));
-        // liquidity = positionLiquidity;
-    }
-
-    /// @return liquidity Amount of total liquidity in the limit position
-    /// @return amount0 Estimated amount of token0 that could be collected by
-    /// burning the limit position
-    /// @return amount1 Estimated amount of token1 that could be collected by
-    /// burning the limit position
-    function getLimitPosition()
-        public
-        view
-        returns (uint128 liquidity, uint256 amount0, uint256 amount1)
-    {
-        uint128 tokensOwed0;
-        uint128 tokensOwed1;
-        (liquidity, tokensOwed0, tokensOwed1, amount0, amount1) = _position(
-            limitLower,
-            limitUpper
-        );
-
-        amount0 = amount0.add(uint256(tokensOwed0));
-        amount1 = amount1.add(uint256(tokensOwed1));
-    }
 
     /// @notice Get the liquidity amount of the given numbers of token0 and token1
     /// @param tickLower The lower tick of the position
@@ -2872,9 +1739,10 @@ contract Hypervisor is IMintCallback, ERC20, ReentrancyGuard {
         int24 tickLower,
         int24 tickUpper,
         uint256 amount0,
-        uint256 amount1
+        uint256 amount1,
+        address pool
     ) internal view returns (uint128) {
-        (uint160 sqrtRatioX96, , , , , , ) = pool.slot0();
+        (uint160 sqrtRatioX96, , , , , , ) = IRoxSpotPool(pool).slot0();
         return
             LiquidityAmounts.getLiquidityForAmounts(
                 sqrtRatioX96,
@@ -2886,250 +1754,18 @@ contract Hypervisor is IMintCallback, ERC20, ReentrancyGuard {
     }
 
     /// @return tick spot pool's current price tick
-    function currentTick() public view returns (int24 tick) {
-        (, tick, , , , , ) = pool.slot0();
+    function currentTick(address pool) public view returns (int24 tick) {
+        (, tick, , , , , ) = IRoxSpotPool(pool).slot0();
     }
 
-    function getDepositAmountRatio() public view returns (uint256) {
-        if (totalSupply() == 0) {
-            (uint256 price, int24 tick) = currentPrice();
-            uint128 liquidity = pool.liquidity();
-            return
-                PriceUtils.getSpli(
-                    price,
-                    tick,
-                    priceRange,
-                    rangeSion,
-                    liquidity
-                );
-        } else {
-            (uint256 total0, uint256 total1) = getTotalAmounts();
-            if (total0 == 0 || total1 == 0) return 0;
-            return FullMath.mulDiv(total1, PRECISION, total0);
-        }
-    }
 
-    function currentPrice() public view returns (uint256 price, int24 tick) {
-        tick = currentTick();
+    function currentPrice(address pool) public view returns (uint256 price, int24 tick) {
+        tick = currentTick(pool);
         price = PriceUtils.getPriceByTick(tick);
     }
 
     function _uint128Safe(uint256 x) internal pure returns (uint128) {
         assert(x <= type(uint128).max);
         return uint128(x);
-    }
-}
-
-/// @title The interface for the Roguex Factory
-/// @notice The Roguex Factory facilitates creation of spot pools and control over the protocol fees
-interface IRoxFactory {
-    /// @notice Returns the tick spacing for a given fee amount, if enabled, or 0 if not enabled
-    /// @dev A fee amount can never be removed, so this value should be hard coded or cached in the calling context
-    /// @param fee The enabled fee, denominated in hundredths of a bip. Returns 0 in case of unenabled fee
-    /// @return The tick spacing
-    function feeAmountTickSpacing(uint24 fee) external view returns (int24);
-
-    /// @notice Returns the pool address for a given pair of tokens and a fee, or address 0 if it does not exist
-    /// @dev tokenA and tokenB may be passed in either token0/token1 or token1/token0 order
-    /// @param tokenA The contract address of either token0 or token1
-    /// @param tokenB The contract address of the other token
-    /// @param fee The fee collected upon every swap in the pool, denominated in hundredths of a bip
-    /// @return pool The pool address
-    function getPool(
-        address tokenA,
-        address tokenB,
-        uint24 fee
-    ) external view returns (address pool);
-}
-
-// File contracts/HypervisorFactory.sol
-
-/// @title HypervisorFactory
-
-interface IHypervisorFactory {
-    function rangeDelta(
-        uint256 _range,
-        uint256 _timeRecords
-    ) external view returns (uint256);
-
-    function decreaseRange(
-        uint256 _range
-    ) external view returns (uint256);
-
-    function decP() external view returns(uint256);
-    function timeSlot() external view returns(int24, uint32, uint32);
-}
-
-contract HypervisorFactory is IHypervisorFactory {
-    IRoxFactory public roxFactory;
-    mapping(address => mapping(address => mapping(uint24 => address)))
-        public getHypervisor; // toke0, token1, fee -> hypervisor address
-    address public feeReward;
-    address public immutable voter;
-    address public owner;
-    address public immutable weth;
-
-    uint256 public rangeMax = 1000;
-    uint256 public rangeMIN = 20;
-    uint256 public preAdjust = 200;
-
-    uint256 public constant rangeSion = 1000;
-
-    uint256 public override decP = 7 days;
-    uint256 public incP = 3 days;
-    
-    uint8 public increaseCountThres = 3;
-
-    struct TimeSlot{
-        int24 tkRange;//int24 public override tkRange = 51;
-        uint32 twapSec;//uint32 public override twapSec = 300;
-        uint32 reblanceGapSec;
-    }
-    TimeSlot private tSlot;
-
-
-    event HypervisorCreated(
-        address token0,
-        address token1,
-        uint24 fee,
-        address hypervisor
-    );
-
-    constructor(
-        address _roxFactory,
-        address _voter,
-        address _feeReward,
-        address _weth
-    ) {
-        owner = msg.sender;
-        voter = _voter;
-        feeReward = _feeReward;
-        roxFactory = IRoxFactory(_roxFactory);
-        weth = _weth;
-
-        tSlot = TimeSlot({
-            tkRange : 51,
-            twapSec : 300,
-            reblanceGapSec : 1 hours
-        });
-    }
-
-    function timeSlot() public override view returns(int24, uint32, uint32){
-        return (tSlot.tkRange, tSlot.twapSec, tSlot.reblanceGapSec);
-    }
-
-    function decreaseRange(
-        uint256 _range
-    ) external view override returns (uint256) {
-        _range = Math.max(
-                (_range * (rangeSion)) / (rangeSion + preAdjust), //priceRange - priceRange.mul(preAdjust).div(rangeSion)
-                rangeMIN
-            );
-        return _range;
-    }
-
-
-    function rangeDelta(
-        uint256 _range,
-        uint256 _timeRecords
-    ) external view override returns (uint256) {
-        // increase range : rebalance count > i_1 within ki days
-        uint256 _curTime = block.timestamp;
-        uint256 thres_sec_kIncrease = _curTime - incP;
-        uint8 countI = 0;
-        for (uint256 i = 0; i < 8; i++){
-            uint256 gTime = (_timeRecords >> (i * 32) ) & 0xFFFFFFFF;
-            if (gTime > thres_sec_kIncrease)
-                countI += 1;   
-        }
-        if (countI >= increaseCountThres) { //increase range
-            _range = Math.min(
-                (_range * (rangeSion + preAdjust)) / (rangeSion), //priceRange + priceRange.mul(preAdjust).div(rangeSion),
-                rangeMax
-            );
-        }
-        // else{
-        //     // do not change range
-        // }
-
-        return _range;
-    }
-
-    function createHypervisor(
-        address tokenA,
-        address tokenB,
-        uint24 fee
-    ) external returns (address hypervisor) {
-        require(msg.sender == address(roxFactory), "of");
-        require(tokenA != tokenB, "id");
-        (address token0, address token1) = tokenA < tokenB
-            ? (tokenA, tokenB)
-            : (tokenB, tokenA);
-        require(token0 != address(0), "za");
-        require(getHypervisor[token0][token1][fee] == address(0), "exi");
-        int24 tickSpacing = 600;
-        // require(tickSpacing != 0, "SF: INCORRECT_FEE");
-        address pool = roxFactory.getPool(token0, token1, fee);
-        require(pool != address(0), "np");
-        hypervisor = address(
-            new Hypervisor{
-                salt: keccak256(
-                    abi.encodePacked(token0, token1, fee, tickSpacing)
-                )
-            }(weth, feeReward, voter, pool, address(this))
-        );
-
-        getHypervisor[token0][token1][fee] = hypervisor;
-        getHypervisor[token1][token0][fee] = hypervisor; // populate mapping in the reverse direction
-        IVoter(voter).createGauge(pool, hypervisor);
-        emit HypervisorCreated(token0, token1, fee, hypervisor);
-    }
-
-    function setFeeReward(address _feeReward) external onlyOwner {
-        feeReward = _feeReward;
-    }
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "ow");
-        _;
-    }
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0));
-        owner = newOwner;
-    }
-
-    function setParams(
-        uint256 _MAX,
-        uint256 _MIN,
-        uint256 _Adjust
-    ) external onlyOwner {
-        require(_MAX < 1000 * 20);
-        require(_MIN < _MAX);
-        rangeMax = _MAX;
-        rangeMIN = _MIN;
-        preAdjust = _Adjust;
-    }
-
-    function setTimeSlot(
-        uint256 _incP,
-        uint256 _decP,
-        int24 _tkRange,
-        uint32 _twapSec,
-        uint32 _reblanceGapSec,
-        uint8 _increaseCountThres
-    ) external onlyOwner {
-        require(_decP > _incP);
-        incP = _incP;
-        decP = _decP;
-        // require(twapSec < 10 minutes, time);
-        tSlot = TimeSlot({
-            tkRange : _tkRange,
-            twapSec : _twapSec,
-            reblanceGapSec : _reblanceGapSec
-        });
-
-        increaseCountThres = _increaseCountThres;
-
     }
 }

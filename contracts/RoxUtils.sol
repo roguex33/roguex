@@ -159,7 +159,7 @@ contract RoxUtils is IRoxUtils {
             require(_perpThres <= _gS.perpThres, "Max perp threshold");
             require(_setlThres <= _gS.setlThres, "Max settle threshold");
             require(_fdFeePerS <= _gS.fdFeePerS * 2, "max funding fee");
-            require(_twapTime < 180, "max twap time"); 
+            require(_twapTime < 1200, "max twap time"); 
             require(_countMin < 20, "max close count frames"); 
 
             PoolSetting storage pSet = poolSetting[_spotPool];
